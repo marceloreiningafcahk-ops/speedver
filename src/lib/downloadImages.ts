@@ -1,6 +1,6 @@
-import { ensureImageCached } from '../store'
 import { zipSync } from 'fflate'
 import type { TaskRecord } from '../types'
+import { ensureImageCached } from '../store'
 
 const MIME_EXTENSIONS: Record<string, string> = {
   'image/png': 'png',
@@ -21,10 +21,7 @@ export interface DownloadImageZipEntry {
 
 type TaskOutputZipTask = Pick<TaskRecord, 'id' | 'createdAt' | 'outputImages'>
 
-export function formatExportFileTime(date: Date): string {
-  const pad = (value: number) => String(value).padStart(2, '0')
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}_${pad(date.getHours())}-${pad(date.getMinutes())}-${pad(date.getSeconds())}`
-}
+export { formatExportFileTime } from './exportFileName'
 
 export async function downloadImageIds(imageIds: string[], fileNameBase = 'images'): Promise<DownloadImagesResult> {
   if (imageIds.length === 0) return { successCount: 0, failCount: 0 }

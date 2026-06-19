@@ -13,7 +13,6 @@ import type {
   MaskDraft,
   TaskRecord,
   FavoriteCollection,
-  ExportData,
   ResponsesApiResponse,
   ResponsesOutputItem,
 } from './types'
@@ -53,7 +52,9 @@ import { validateMaskMatchesImage } from './lib/canvasImage'
 import { orderInputImagesForMask } from './lib/mask'
 import { getChangedParams, normalizeParamsForSettings } from './lib/paramCompatibility'
 import { createTransparentOutputMeta, getTransparentRequestParams, removeKeyedBackgroundFromDataUrl } from './lib/transparentImage'
-import { zipSync, unzipSync, strToU8, strFromU8 } from 'fflate'
+import { blobToDataUrl, fileToDataUrl } from './lib/dataUrl'
+import { formatExportFileTime } from './lib/exportFileName'
+import { buildExportZip, readExportZip, readExportZipFileAsDataUrl } from './lib/exportZip'
 
 export const ALL_FAVORITES_COLLECTION_ID = '__all_favorites__'
 export const DEFAULT_FAVORITE_COLLECTION_ID = '__default_favorites__'
@@ -4973,27 +4974,6 @@ export async function clearData(options: ClearOptions = { clearConfig: true, cle
   showToast('所选数据已清空', 'success')
 }
 
-/** 从 dataUrl 解析出 MIME 扩展名和二进制数据 */
-function dataUrlToBytes(dataUrl: string): { ext: string; bytes: Uint8Array } {
-  const match = dataUrl.match(/^data:image\/(\w+);base64,/)
-  const ext = match?.[1] ?? 'png'
-  const b64 = dataUrl.replace(/^data:[^;]+;base64,/, '')
-  const binary = atob(b64)
-  const bytes = new Uint8Array(binary.length)
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
-  return { ext, bytes }
-}
-
-/** 将二进制数据还原为 dataUrl */
-function bytesToDataUrl(bytes: Uint8Array, filePath: string): string {
-  const ext = filePath.split('.').pop()?.toLowerCase() ?? 'png'
-  const mimeMap: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp' }
-  const mime = mimeMap[ext] ?? 'image/png'
-  let binary = ''
-  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i])
-  return `data:${mime};base64,${btoa(binary)}`
-}
-
 async function completeRecoveredCustomTask(task: TaskRecord, result: Awaited<ReturnType<typeof getCustomQueuedImageResult>>) {
   const latest = useStore.getState().tasks.find((item) => item.id === task.id)
   if (!latest || latest.status === 'done') return
@@ -5046,11 +5026,6 @@ async function recoverCustomTask(taskId: string) {
   }
 }
 
-function formatExportFileTime(date: Date): string {
-  const pad = (value: number) => String(value).padStart(2, '0')
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}_${pad(date.getHours())}-${pad(date.getMinutes())}-${pad(date.getSeconds())}`
-}
-
 /** 导出选项 */
 export interface ExportOptions {
   exportConfig?: boolean
@@ -5064,57 +5039,13 @@ export async function exportData(options: ExportOptions = { exportConfig: true, 
     const images = options.exportTasks ? await getAllImages() : []
     const { settings, agentConversations, favoriteCollections, defaultFavoriteCollectionId } = useStore.getState()
     const exportedAt = Date.now()
-    const imageCreatedAtFallback = new Map<string, number>()
-
-    if (options.exportTasks) {
-      for (const task of tasks) {
-        for (const id of [
-          ...(task.inputImageIds || []),
-          ...(task.maskImageId ? [task.maskImageId] : []),
-          ...(task.outputImages || []),
-          ...(task.transparentOriginalImages || []),
-          ...(task.streamPartialImageIds || []),
-        ]) {
-          if (!id) continue
-          const prev = imageCreatedAtFallback.get(id)
-          if (prev == null || task.createdAt < prev) {
-            imageCreatedAtFallback.set(id, task.createdAt)
-          }
-        }
-      }
-    }
-
-    const imageFiles: ExportData['imageFiles'] = {}
-    const thumbnailFiles: NonNullable<ExportData['thumbnailFiles']> = {}
-    const zipFiles: Record<string, Uint8Array | [Uint8Array, { mtime: Date }]> = {}
+    const thumbnailsByImageId = new Map<string, NonNullable<Awaited<ReturnType<typeof getImageThumbnail>>>>()
 
     if (options.exportTasks) {
       for (const img of images) {
-        const { ext, bytes } = dataUrlToBytes(img.dataUrl)
-        const path = `images/${img.id}.${ext}`
-        const createdAt = img.createdAt ?? imageCreatedAtFallback.get(img.id) ?? exportedAt
-        imageFiles[img.id] = {
-          path,
-          createdAt,
-          source: img.source,
-          width: img.width,
-          height: img.height,
-        }
-        zipFiles[path] = [bytes, { mtime: new Date(createdAt) }]
-
         const thumbnail = await getImageThumbnail(img.id)
         if (thumbnail?.thumbnailDataUrl) {
-          const { ext: thumbnailExt, bytes: thumbnailBytes } = dataUrlToBytes(thumbnail.thumbnailDataUrl)
-          const thumbnailPath = `thumbnails/${img.id}.${thumbnailExt}`
-          imageFiles[img.id].width = imageFiles[img.id].width ?? thumbnail.width
-          imageFiles[img.id].height = imageFiles[img.id].height ?? thumbnail.height
-          thumbnailFiles[img.id] = {
-            path: thumbnailPath,
-            width: thumbnail.width,
-            height: thumbnail.height,
-            thumbnailVersion: thumbnail.thumbnailVersion,
-          }
-          zipFiles[thumbnailPath] = [thumbnailBytes, { mtime: new Date(createdAt) }]
+          thumbnailsByImageId.set(img.id, thumbnail)
           cacheThumbnail(img.id, {
             dataUrl: thumbnail.thumbnailDataUrl,
             width: thumbnail.width,
@@ -5125,24 +5056,17 @@ export async function exportData(options: ExportOptions = { exportConfig: true, 
       }
     }
 
-    const manifest: ExportData = {
-      version: 3,
-      exportedAt: new Date(exportedAt).toISOString(),
-    }
-
-    if (options.exportConfig) manifest.settings = settings
-    if (options.exportTasks) {
-      manifest.tasks = tasks
-      manifest.favoriteCollections = favoriteCollections
-      manifest.defaultFavoriteCollectionId = defaultFavoriteCollectionId
-      manifest.agentConversations = getPersistableAgentConversations(agentConversations)
-      manifest.imageFiles = imageFiles
-      manifest.thumbnailFiles = thumbnailFiles
-    }
-
-    zipFiles['manifest.json'] = [strToU8(JSON.stringify(manifest, null, 2)), { mtime: new Date(exportedAt) }]
-
-    const zipped = zipSync(zipFiles, { level: 6 })
+    const { bytes: zipped } = buildExportZip({
+      options,
+      exportedAt,
+      settings,
+      tasks,
+      images,
+      thumbnailsByImageId,
+      favoriteCollections,
+      defaultFavoriteCollectionId,
+      agentConversations: getPersistableAgentConversations(agentConversations),
+    })
     const blob = new Blob([zipped.buffer as ArrayBuffer], { type: 'application/zip' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
@@ -5171,20 +5095,14 @@ export interface ImportOptions {
 export async function importData(file: File, options: ImportOptions = { importConfig: true, importTasks: true }): Promise<boolean> {
   try {
     const buffer = await file.arrayBuffer()
-    const unzipped = unzipSync(new Uint8Array(buffer))
-
-    const manifestBytes = unzipped['manifest.json']
-    if (!manifestBytes) throw new Error('ZIP 中缺少 manifest.json')
-
-    const data: ExportData = JSON.parse(strFromU8(manifestBytes))
+    const { manifest: data, files } = readExportZip(new Uint8Array(buffer))
 
     const importedImageIds: string[] = []
     if (options.importTasks && data.tasks && data.imageFiles) {
       // 还原图片
       for (const [id, info] of Object.entries(data.imageFiles)) {
-        const bytes = unzipped[info.path]
-        if (!bytes) continue
-        const dataUrl = bytesToDataUrl(bytes, info.path)
+        const dataUrl = readExportZipFileAsDataUrl(files, info.path)
+        if (!dataUrl) continue
         await putImage({
           id,
           dataUrl,
@@ -5198,9 +5116,8 @@ export async function importData(file: File, options: ImportOptions = { importCo
       }
 
       for (const [id, info] of Object.entries(data.thumbnailFiles ?? {})) {
-        const bytes = unzipped[info.path]
-        if (!bytes) continue
-        const thumbnailDataUrl = bytesToDataUrl(bytes, info.path)
+        const thumbnailDataUrl = readExportZipFileAsDataUrl(files, info.path)
+        if (!thumbnailDataUrl) continue
         await putImageThumbnail({
           id,
           thumbnailDataUrl,
@@ -5304,20 +5221,3 @@ export async function addImageFromUrl(src: string): Promise<void> {
   useStore.getState().addInputImage({ id, dataUrl })
 }
 
-function fileToDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => resolve(reader.result as string)
-    reader.onerror = reject
-    reader.readAsDataURL(file)
-  })
-}
-
-function blobToDataUrl(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => resolve(reader.result as string)
-    reader.onerror = reject
-    reader.readAsDataURL(blob)
-  })
-}
