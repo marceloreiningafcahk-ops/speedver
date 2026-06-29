@@ -11,6 +11,7 @@ import SearchBar from './components/SearchBar'
 import TaskGrid from './components/TaskGrid'
 import AgentWorkspace from './components/AgentWorkspace'
 import TemplateWorkspace from './components/TemplateWorkspace'
+import BatchWorkspace from './components/BatchWorkspace'
 import SaveTemplateModal from './components/SaveTemplateModal'
 import InputBar from './components/InputBar'
 import DetailModal from './components/DetailModal'
@@ -114,6 +115,8 @@ export default function App() {
       <Header />
       {appMode === 'agent' ? (
         <AgentWorkspace />
+      ) : appMode === 'batch' ? (
+        <BatchWorkspace />
       ) : appMode === 'template' ? (
         <TemplateWorkspace />
       ) : (
@@ -124,7 +127,7 @@ export default function App() {
           </div>
         </main>
       )}
-      {appMode !== 'template' && <InputBar />}
+      {appMode !== 'template' && appMode !== 'batch' && <InputBar />}
       {showSaveTemplateModal && <SaveTemplateModal />}
       <DetailModal />
       <Lightbox />

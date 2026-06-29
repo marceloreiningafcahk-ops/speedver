@@ -96,6 +96,21 @@ type AgentInputDraft = {
   updatedAt?: number
 }
 
+export interface BatchSubmitTaskInput {
+  prompt?: string
+  images: InputImage[]
+  fileName?: string
+}
+
+export interface BatchSubmitOptions {
+  batchName?: string
+  commonPrompt?: string
+  commonImage?: InputImage | null
+  tasks: BatchSubmitTaskInput[]
+  concurrency?: number
+  params?: TaskParams
+}
+
 export function getErrorToastMessage(message: string): string {
   const text = message.trim()
   if (!text) return '操作失败'
@@ -723,7 +738,9 @@ function mergePersistedState(persistedState: unknown, currentState: AppState): A
     typeof persisted.activeAgentConversationId === 'string' && (!hasPersistedAgentConversations || agentConversations.some((conversation) => conversation.id === persisted.activeAgentConversationId))
       ? persisted.activeAgentConversationId
       : agentConversations[0]?.id ?? null
-  const appMode = persisted.appMode === 'agent' ? 'agent' : 'gallery'
+  const appMode = persisted.appMode === 'agent' || persisted.appMode === 'template' || persisted.appMode === 'batch'
+    ? persisted.appMode
+    : 'gallery'
   const galleryInputDraft = settings.persistInputOnRestart
     ? normalizeAgentInputDraft(persisted.galleryInputDraft ?? {
         prompt: persisted.prompt,
@@ -1170,7 +1187,7 @@ export const useStore = create<AppState>()(
       // Mode
       appMode: 'gallery',
       setAppMode: (appMode) => {
-        if (appMode === 'gallery' || appMode === 'template') {
+        if (appMode === 'gallery' || appMode === 'template' || appMode === 'batch') {
           const state = get()
           const agentInputDrafts = saveActiveAgentInputDrafts(state)
           const galleryInputDraft = saveGalleryInputDraft(state)
@@ -2566,6 +2583,120 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
     useStore.getState().clearInputImages()
   }
   useStore.getState().setReusedTaskApiProfile(null)
+}
+
+function mergeBatchPrompt(commonPrompt: string | undefined, taskPrompt: string | undefined) {
+  return [commonPrompt?.trim(), taskPrompt?.trim()].filter(Boolean).join('\n\n')
+}
+
+function getUniqueBatchImages(commonImage: InputImage | null | undefined, images: InputImage[]) {
+  const seen = new Set<string>()
+  const merged = commonImage ? [commonImage, ...images] : images
+  return merged.filter((img) => {
+    if (seen.has(img.id)) return false
+    seen.add(img.id)
+    return true
+  })
+}
+
+async function runTaskIdsWithConcurrency(taskIds: string[], concurrency: number) {
+  let cursor = 0
+  const workerCount = Math.min(taskIds.length, Math.max(1, Math.trunc(concurrency)))
+
+  await Promise.all(Array.from({ length: workerCount }).map(async () => {
+    while (cursor < taskIds.length) {
+      const taskId = taskIds[cursor]
+      cursor += 1
+      await executeTask(taskId)
+    }
+  }))
+}
+
+export async function submitBatchTasks(options: BatchSubmitOptions) {
+  const state = useStore.getState()
+  const settings = normalizeSettings(state.settings)
+  const activeProfile = getActiveApiProfile(settings)
+  const validationError = validateApiProfile(activeProfile)
+
+  if (validationError) {
+    state.showToast(`请先完善请求 API 配置：${validationError}`, 'error')
+    state.setShowSettings(true, 'api')
+    return
+  }
+
+  const requestSettings = createSettingsForApiProfile(settings, activeProfile)
+  const batchId = genId()
+  const batchName = options.batchName?.trim() || `批量任务 ${new Date().toLocaleString()}`
+  const normalizedInputs = options.tasks
+    .map((task, index) => ({
+      index,
+      prompt: mergeBatchPrompt(options.commonPrompt, task.prompt),
+      images: getUniqueBatchImages(options.commonImage, task.images),
+      fileName: task.fileName?.trim(),
+    }))
+    .filter((task) => task.prompt || task.images.length > 0)
+
+  if (!normalizedInputs.length) {
+    state.showToast('请至少添加一个包含提示词或参考图的任务', 'error')
+    return
+  }
+
+  const tooManyImagesTask = normalizedInputs.find((task) => task.images.length > 16)
+  if (tooManyImagesTask) {
+    state.showToast(`第 ${tooManyImagesTask.index + 1} 个任务参考图超过 16 张`, 'error')
+    return
+  }
+
+  const tasks: TaskRecord[] = []
+  const now = Date.now()
+  for (let index = 0; index < normalizedInputs.length; index++) {
+    const item = normalizedInputs[index]
+    for (const img of item.images) {
+      await storeImage(img.dataUrl)
+      cacheImage(img.id, img.dataUrl)
+    }
+
+    const normalizedParams = normalizeParamsForSettings(options.params ?? state.params, requestSettings, { hasInputImages: item.images.length > 0 })
+    const shouldUseTransparentOutput = normalizedParams.output_format === 'png' && normalizedParams.transparent_output
+    const taskParams = shouldUseTransparentOutput
+      ? getTransparentRequestParams(normalizedParams)
+      : { ...normalizedParams, transparent_output: false }
+    const prompt = item.prompt || options.commonPrompt?.trim() || '参考图生成'
+    const transparentMeta = taskParams.transparent_output
+      ? createTransparentOutputMeta(prompt)
+      : null
+    const task: TaskRecord = {
+      id: genId(),
+      prompt,
+      params: taskParams,
+      apiProvider: activeProfile.provider,
+      apiProfileId: activeProfile.id,
+      apiProfileName: activeProfile.name,
+      apiMode: activeProfile.apiMode,
+      apiModel: activeProfile.model,
+      inputImageIds: item.images.map((img) => img.id),
+      transparentOutput: transparentMeta?.transparentOutput,
+      transparentPrompt: transparentMeta?.effectivePrompt,
+      outputImages: [],
+      status: 'running',
+      error: null,
+      createdAt: now,
+      finishedAt: null,
+      elapsed: null,
+      sourceMode: 'batch',
+      batchId,
+      batchName,
+      batchIndex: index + 1,
+      batchTotal: normalizedInputs.length,
+      batchFileName: item.fileName,
+    }
+    tasks.push(task)
+  }
+
+  useStore.getState().setTasks([...tasks, ...useStore.getState().tasks])
+  await Promise.all(tasks.map((task) => putTask(task)))
+  useStore.getState().showToast(`已提交 ${tasks.length} 个批量任务`, 'success')
+  void runTaskIdsWithConcurrency(tasks.map((task) => task.id), options.concurrency ?? 2)
 }
 
 /**

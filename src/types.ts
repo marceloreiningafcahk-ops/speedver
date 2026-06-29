@@ -1,7 +1,7 @@
 ﻿// ===== 设置 =====
 
 export type ApiMode = 'images' | 'responses'
-export type AppMode = 'gallery' | 'agent' | 'template'
+export type AppMode = 'gallery' | 'agent' | 'template' | 'batch'
 export type AgentApiConfigMode = 'off' | 'native' | 'hybrid'
 export type ReferenceImageEditAction = 'ask' | 'replace-reference' | 'add-mask'
 export const ZIP_DOWNLOAD_ROUTE_VALUES = [
@@ -235,6 +235,16 @@ export interface TaskRecord {
   sourceTemplateName?: string
   /** 来源模式：画廊 / Agent */
   sourceMode?: AppMode
+  /** 批量生图任务组 ID */
+  batchId?: string
+  /** 批量生图任务组名称 */
+  batchName?: string
+  /** 当前任务在批量任务组中的序号（从 1 开始） */
+  batchIndex?: number
+  /** 批量任务组总任务数 */
+  batchTotal?: number
+  /** 批量导出时建议使用的文件名 */
+  batchFileName?: string
   /** Agent 对话 ID */
   agentConversationId?: string
   /** Agent 轮次 ID */
