@@ -106,6 +106,7 @@ export interface BatchSubmitOptions {
   batchName?: string
   commonPrompt?: string
   commonImage?: InputImage | null
+  commonImages?: InputImage[]
   tasks: BatchSubmitTaskInput[]
   concurrency?: number
   params?: TaskParams
@@ -2589,9 +2590,9 @@ function mergeBatchPrompt(commonPrompt: string | undefined, taskPrompt: string |
   return [commonPrompt?.trim(), taskPrompt?.trim()].filter(Boolean).join('\n\n')
 }
 
-function getUniqueBatchImages(commonImage: InputImage | null | undefined, images: InputImage[]) {
+function getUniqueBatchImages(commonImages: InputImage[], images: InputImage[]) {
   const seen = new Set<string>()
-  const merged = commonImage ? [commonImage, ...images] : images
+  const merged = [...commonImages, ...images]
   return merged.filter((img) => {
     if (seen.has(img.id)) return false
     seen.add(img.id)
@@ -2627,11 +2628,16 @@ export async function submitBatchTasks(options: BatchSubmitOptions) {
   const requestSettings = createSettingsForApiProfile(settings, activeProfile)
   const batchId = genId()
   const batchName = options.batchName?.trim() || `批量任务 ${new Date().toLocaleString()}`
+  const commonImages = options.commonImages?.length
+    ? options.commonImages
+    : options.commonImage
+      ? [options.commonImage]
+      : []
   const normalizedInputs = options.tasks
     .map((task, index) => ({
       index,
       prompt: mergeBatchPrompt(options.commonPrompt, task.prompt),
-      images: getUniqueBatchImages(options.commonImage, task.images),
+      images: getUniqueBatchImages(commonImages, task.images),
       fileName: task.fileName?.trim(),
     }))
     .filter((task) => task.prompt || task.images.length > 0)

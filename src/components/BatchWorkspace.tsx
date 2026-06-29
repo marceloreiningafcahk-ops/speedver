@@ -62,12 +62,13 @@ function ImageThumb({ image, onRemove }: { image: InputImage; onRemove: () => vo
 
 export default function BatchWorkspace() {
   const settings = useStore((s) => s.settings)
+  const setSettings = useStore((s) => s.setSettings)
   const params = useStore((s) => s.params)
   const tasksInStore = useStore((s) => s.tasks)
   const [batchName, setBatchName] = useState('批量生图')
   const [commonPrompt, setCommonPrompt] = useState('')
-  const [commonImage, setCommonImage] = useState<InputImage | null>(null)
-  const [batchParams, setBatchParams] = useState<TaskParams>(() => ({ ...params }))
+  const [commonImages, setCommonImages] = useState<InputImage[]>([])
+  const [batchParams, setBatchParams] = useState<TaskParams>(() => ({ ...params, moderation: 'auto', transparent_output: false }))
   const [showSizePicker, setShowSizePicker] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [dragActive, setDragActive] = useState(false)
@@ -81,9 +82,13 @@ export default function BatchWorkspace() {
       .sort((a, b) => b.createdAt - a.createdAt)
       .slice(0, 8)
   ), [tasksInStore])
-  const readyTaskCount = draftTasks.filter((task) => commonPrompt.trim() || task.prompt.trim() || task.images.length > 0 || commonImage).length
+  const readyTaskCount = draftTasks.filter((task) => commonPrompt.trim() || task.prompt.trim() || task.images.length > 0 || commonImages.length > 0).length
   const currentProfile = settings.profiles.find((profile) => profile.id === settings.activeProfileId) ?? settings.profiles[0]
   const outputImageLimit = getOutputImageLimitForSettings(settings)
+  const profileOptions = useMemo(
+    () => settings.profiles.map((profile) => ({ label: profile.name, value: profile.id })),
+    [settings.profiles],
+  )
   const selectClass = 'px-3 py-2 rounded-lg border border-gray-200 bg-white text-sm transition shadow-sm dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-gray-100'
   const fieldClass = 'w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm outline-none transition focus:border-blue-400 dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-gray-100'
 
@@ -91,8 +96,18 @@ export default function BatchWorkspace() {
     setBatchParams((current) => ({ ...current, ...patch }))
   }
 
-  const addEmptyTask = () => {
-    setDraftTasks((items) => [...items, { id: newDraftId(), prompt: '', images: [], fileName: '' }])
+  const handleSwitchProfile = (profileId: string) => {
+    if (profileId === settings.activeProfileId) return
+    setSettings({ activeProfileId: profileId })
+  }
+
+  const handleModelChange = (model: string) => {
+    if (!currentProfile) return
+    setSettings({
+      profiles: settings.profiles.map((profile) =>
+        profile.id === currentProfile.id ? { ...profile, model } : profile,
+      ),
+    })
   }
 
   const removeImage = async (image: InputImage, onAfter: () => void) => {
@@ -114,11 +129,9 @@ export default function BatchWorkspace() {
 
   const handleCommonImageFiles = async (files: FileList | null) => {
     if (!files?.length) return
-    const [image] = await filesToInputImages(files)
-    if (!image) return
-    const previous = commonImage
-    setCommonImage(image)
-    if (previous) await deleteImageIfUnreferenced(previous.id)
+    const images = await filesToInputImages(files)
+    if (!images.length) return
+    setCommonImages((items) => [...items, ...images])
   }
 
   const handleTaskImageFiles = async (taskId: string, files: FileList | null) => {
@@ -173,7 +186,7 @@ export default function BatchWorkspace() {
       await submitBatchTasks({
         batchName,
         commonPrompt,
-        commonImage,
+        commonImages,
         tasks,
         params: batchParams,
       })
@@ -238,17 +251,18 @@ export default function BatchWorkspace() {
               />
             </label>
             <div className="mb-3">
-              <span className="mb-2 block text-xs text-gray-500 dark:text-gray-400">通用参考图</span>
-              <div className="flex items-center gap-2">
-                {commonImage ? (
-                  <ImageThumb image={commonImage} onRemove={() => void removeImage(commonImage, () => setCommonImage(null))} />
-                ) : (
-                  <label className="flex h-16 w-16 cursor-pointer items-center justify-center rounded-lg border border-dashed border-gray-300 text-gray-400 transition hover:bg-gray-50 dark:border-white/[0.12] dark:hover:bg-white/[0.04]">
-                    <PlusIcon className="h-5 w-5" />
-                    <input type="file" accept="image/*" className="hidden" onChange={(e) => void handleCommonImageFiles(e.target.files)} />
-                  </label>
-                )}
-                <p className="text-xs leading-5 text-gray-500 dark:text-gray-400">会自动放在每个任务的参考图最前面。</p>
+              <span className="mb-2 block text-xs text-gray-500 dark:text-gray-400">通用参考图（图一）</span>
+              <div className="flex flex-wrap items-center gap-2">
+                {commonImages.map((image) => (
+                  <ImageThumb key={image.id} image={image} onRemove={() => void removeImage(image, () => setCommonImages((items) => items.filter((item) => item.id !== image.id)))} />
+                ))}
+                <label className="flex h-16 w-16 cursor-pointer items-center justify-center rounded-lg border border-dashed border-gray-300 text-gray-400 transition hover:bg-gray-50 dark:border-white/[0.12] dark:hover:bg-white/[0.04]">
+                  <PlusIcon className="h-5 w-5" />
+                  <input type="file" accept="image/*" multiple className="hidden" onChange={(e) => void handleCommonImageFiles(e.target.files)} />
+                </label>
+                <p className="min-w-[150px] flex-1 text-xs leading-5 text-gray-500 dark:text-gray-400">
+                  提交时会统一排在每个任务的参考图最前面。
+                </p>
               </div>
             </div>
           </div>
@@ -256,6 +270,23 @@ export default function BatchWorkspace() {
           <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm dark:border-white/[0.08] dark:bg-gray-900">
             <h3 className="mb-3 text-sm font-semibold text-gray-800 dark:text-gray-100">生图参数</h3>
             <div className="grid grid-cols-2 gap-3 text-xs">
+              <label className="col-span-2">
+                <span className="mb-1 block text-gray-500 dark:text-gray-400">当前配置</span>
+                <Select
+                  value={currentProfile?.id ?? ''}
+                  onChange={(value) => handleSwitchProfile(String(value))}
+                  options={profileOptions}
+                  className={selectClass}
+                />
+              </label>
+              <label className="col-span-2">
+                <span className="mb-1 block text-gray-500 dark:text-gray-400">模型 ID</span>
+                <input
+                  value={currentProfile?.model ?? ''}
+                  onChange={(e) => handleModelChange(e.target.value)}
+                  className={`${fieldClass} font-mono`}
+                />
+              </label>
               <label>
                 <span className="mb-1 block text-gray-500 dark:text-gray-400">尺寸</span>
                 <button
@@ -300,7 +331,7 @@ export default function BatchWorkspace() {
                     setBatchParam({
                       output_format: outputFormat,
                       output_compression: outputFormat === 'png' ? null : batchParams.output_compression,
-                      transparent_output: outputFormat === 'png' ? batchParams.transparent_output : false,
+                      transparent_output: false,
                     })
                   }}
                   options={[
@@ -311,32 +342,7 @@ export default function BatchWorkspace() {
                   className={selectClass}
                 />
               </label>
-              <label>
-                <span className="mb-1 block text-gray-500 dark:text-gray-400">审核</span>
-                <Select
-                  value={batchParams.moderation}
-                  onChange={(value) => setBatchParam({ moderation: value as TaskParams['moderation'] })}
-                  options={[
-                    { label: 'auto', value: 'auto' },
-                    { label: 'low', value: 'low' },
-                  ]}
-                  className={selectClass}
-                />
-              </label>
-              {batchParams.output_format === 'png' ? (
-                <label>
-                  <span className="mb-1 block text-gray-500 dark:text-gray-400">透明背景</span>
-                  <Select
-                    value={batchParams.transparent_output ? 'on' : 'off'}
-                    onChange={(value) => setBatchParam({ transparent_output: value === 'on', output_compression: null })}
-                    options={[
-                      { label: 'false', value: 'off' },
-                      { label: 'true', value: 'on' },
-                    ]}
-                    className={selectClass}
-                  />
-                </label>
-              ) : (
+              {batchParams.output_format !== 'png' && (
                 <label>
                   <span className="mb-1 block text-gray-500 dark:text-gray-400">压缩率</span>
                   <input
@@ -361,29 +367,15 @@ export default function BatchWorkspace() {
                 <h3 className="text-sm font-semibold text-gray-800 dark:text-gray-100">任务列表</h3>
                 <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">{readyTaskCount} 个可提交任务</p>
               </div>
-              <div className="flex flex-wrap gap-2">
-                <label className="cursor-pointer rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-600 transition hover:bg-gray-50 dark:border-white/[0.08] dark:text-gray-300 dark:hover:bg-white/[0.04]">
-                  多图拆任务
-                  <input type="file" accept="image/*" multiple className="hidden" onChange={(e) => void appendImageTasks(e.target.files)} />
-                </label>
-                <button
-                  type="button"
-                  onClick={addEmptyTask}
-                  className="inline-flex items-center gap-1 rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-600 transition hover:bg-gray-50 dark:border-white/[0.08] dark:text-gray-300 dark:hover:bg-white/[0.04]"
-                >
-                  <PlusIcon className="h-4 w-4" />
-                  添加任务
-                </button>
-              </div>
             </div>
 
             <div className="mb-4 rounded-lg border border-dashed border-gray-300 bg-gray-50 px-4 py-5 text-center text-sm text-gray-500 dark:border-white/[0.12] dark:bg-white/[0.03] dark:text-gray-400">
               拖入多张图片，或直接粘贴剪贴板图片，会按图片数量创建任务卡。
             </div>
 
-            <div className="space-y-3">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
               {draftTasks.map((task, index) => (
-                <div key={task.id} className="rounded-lg border border-gray-200 p-3 dark:border-white/[0.08]">
+                <div key={task.id} className="flex min-h-[320px] flex-col rounded-lg border border-gray-200 bg-white p-3 shadow-sm transition hover:shadow-md dark:border-white/[0.08] dark:bg-gray-950/40">
                   <div className="mb-2 flex items-center justify-between gap-2">
                     <span className="text-xs font-medium text-gray-500 dark:text-gray-400">任务 {index + 1}</span>
                     <button
@@ -398,11 +390,11 @@ export default function BatchWorkspace() {
                   <textarea
                     value={task.prompt}
                     onChange={(e) => updateTask(task.id, { prompt: e.target.value })}
-                    rows={3}
+                    rows={4}
                     placeholder="当前任务额外提示词，可留空只使用通用提示词。"
                     className="mb-3 w-full resize-none rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm outline-none transition focus:border-blue-400 dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-gray-100"
                   />
-                  <div className="mb-3 flex flex-wrap gap-2">
+                  <div className="mb-3 grid grid-cols-3 gap-2">
                     {task.images.map((image) => (
                       <ImageThumb
                         key={image.id}
@@ -419,7 +411,7 @@ export default function BatchWorkspace() {
                     value={task.fileName}
                     onChange={(e) => updateTask(task.id, { fileName: e.target.value })}
                     placeholder="导出文件名，可选"
-                    className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs outline-none transition focus:border-blue-400 dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-gray-100"
+                    className="mt-auto w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs outline-none transition focus:border-blue-400 dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-gray-100"
                   />
                 </div>
               ))}
