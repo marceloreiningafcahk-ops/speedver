@@ -131,7 +131,7 @@ import { clearAgentConversations, clearImages, clearTasks, getAllAgentConversati
 import { callAgentResponsesApi, callBatchImageSingle } from './lib/agentApi'
 import { getFalQueuedImageResult } from './lib/falAiImageApi'
 import { removeKeyedBackgroundFromDataUrl } from './lib/transparentImage'
-import { cleanStaleAgentInputDrafts, clearFailedTasks, deleteAgentRoundFromConversation, deleteFavoriteCollection, editOutputs, getActiveAgentRounds, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, markInterruptedOpenAIRunningTasks, migratePersistedState, regenerateAgentAssistantMessage, remapAgentRoundMentionsForPathChange, removeTask, reuseConfig, submitAgentMessage, submitTask, taskMatchesFilterStatus, taskMatchesSearchQuery, useStore } from './store'
+import { cleanStaleAgentInputDrafts, clearFailedTasks, deleteAgentRoundFromConversation, deleteFavoriteCollection, editOutputs, getActiveAgentRounds, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, markInterruptedOpenAIRunningTasks, migratePersistedState, regenerateAgentAssistantMessage, remapAgentRoundMentionsForPathChange, removeTask, reuseConfig, submitAgentMessage, submitTask, taskMatchesFilterSourceMode, taskMatchesFilterStatus, taskMatchesSearchQuery, useStore } from './store'
 
 const imageA = { id: 'image-a', dataUrl: 'data:image/png;base64,a' }
 const imageB = { id: 'image-b', dataUrl: 'data:image/png;base64,b' }
@@ -1752,6 +1752,14 @@ describe('agent context for removed outputs', () => {
     expect(taskMatchesFilterStatus(partial, 'error')).toBe(true)
     expect(taskMatchesFilterStatus(partial, 'done')).toBe(true)
     expect(taskMatchesSearchQuery(partial, 'failed to fetch')).toBe(true)
+  })
+
+  it('matches task source mode for new and legacy task records', () => {
+    expect(taskMatchesFilterSourceMode(task({ id: 'plain-gallery-task' }), 'gallery')).toBe(true)
+    expect(taskMatchesFilterSourceMode(task({ id: 'batch-task', batchId: 'batch-1' }), 'batch')).toBe(true)
+    expect(taskMatchesFilterSourceMode(task({ id: 'template-task', sourceTemplateId: 'template-1' }), 'template')).toBe(true)
+    expect(taskMatchesFilterSourceMode(task({ id: 'agent-task', agentRoundId: 'round-1' }), 'agent')).toBe(true)
+    expect(taskMatchesFilterSourceMode(task({ id: 'explicit-batch-task', sourceMode: 'batch' }), 'gallery')).toBe(false)
   })
 
   it('clears partial failure markers without deleting successful outputs', async () => {

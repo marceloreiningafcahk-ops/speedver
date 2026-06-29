@@ -1,5 +1,5 @@
 import { useEffect, useRef, type ReactNode } from 'react'
-import { ALL_FAVORITES_COLLECTION_ID, clearFailedTasks, getTaskFavoriteCollectionIds, useStore, taskMatchesFilterStatus, taskMatchesSearchQuery } from '../store'
+import { ALL_FAVORITES_COLLECTION_ID, clearFailedTasks, getTaskFavoriteCollectionIds, useStore, taskMatchesFilterStatus, taskMatchesFilterDate, taskMatchesFilterSourceMode, taskMatchesSearchQuery } from '../store'
 import { useTooltip } from '../hooks/useTooltip'
 import Select from './Select'
 import DateRangePicker from './DateRangePicker'
@@ -55,6 +55,8 @@ export default function SearchBar() {
   const filterDateValue = useStore((s) => s.filterDateValue)
   const filterDateEnd = useStore((s) => s.filterDateEnd)
   const setDateRange = useStore((s) => s.setDateRange)
+  const filterSourceMode = useStore((s) => s.filterSourceMode)
+  const setFilterSourceMode = useStore((s) => s.setFilterSourceMode)
   const clearSelection = useStore((s) => s.clearSelection)
   const filterFavorite = useStore((s) => s.filterFavorite)
   const setFilterFavorite = useStore((s) => s.setFilterFavorite)
@@ -69,6 +71,8 @@ export default function SearchBar() {
         if (!task.isFavorite) return false
         if (s.activeFavoriteCollectionId && s.activeFavoriteCollectionId !== ALL_FAVORITES_COLLECTION_ID && !getTaskFavoriteCollectionIds(task).includes(s.activeFavoriteCollectionId)) return false
       }
+      if (!taskMatchesFilterDate(task, s.filterDate, s.filterDateValue, s.filterDateEnd)) return false
+      if (!taskMatchesFilterSourceMode(task, s.filterSourceMode)) return false
       return taskMatchesSearchQuery(task, q)
     }).length
   })
@@ -112,6 +116,8 @@ export default function SearchBar() {
           if (!task.isFavorite) return false
           if (state.activeFavoriteCollectionId && state.activeFavoriteCollectionId !== ALL_FAVORITES_COLLECTION_ID && !getTaskFavoriteCollectionIds(task).includes(state.activeFavoriteCollectionId)) return false
         }
+        if (!taskMatchesFilterDate(task, state.filterDate, state.filterDateValue, state.filterDateEnd)) return false
+        if (!taskMatchesFilterSourceMode(task, state.filterSourceMode)) return false
         return taskMatchesSearchQuery(task, q)
       })
       .map((task) => task.id)
@@ -131,6 +137,12 @@ export default function SearchBar() {
   const handleStatusChange = (val: any) => {
     if (val === filterStatus) return
     setFilterStatus(val)
+    clearSelection()
+  }
+
+  const handleSourceModeChange = (val: any) => {
+    if (val === filterSourceMode) return
+    setFilterSourceMode(val)
     clearSelection()
   }
 
@@ -192,6 +204,20 @@ export default function SearchBar() {
                   { label: '最近7天', value: 'week' },
                   { label: '最近30天', value: 'month' },
                   { label: '指定日期', value: 'specific' },
+                ]}
+                className="px-3 py-2.5 rounded-xl border border-gray-200 dark:border-white/[0.08] bg-white dark:bg-gray-900 hover:bg-gray-50 dark:hover:bg-white/[0.06] text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400 transition"
+              />
+            </div>
+            <div className="relative w-[104px]">
+              <Select
+                value={filterSourceMode}
+                onChange={handleSourceModeChange}
+                options={[
+                  { label: '全部模式', value: 'all' },
+                  { label: '生图模式', value: 'gallery' },
+                  { label: '模板模式', value: 'template' },
+                  { label: '批量模式', value: 'batch' },
+                  { label: 'Agent', value: 'agent' },
                 ]}
                 className="px-3 py-2.5 rounded-xl border border-gray-200 dark:border-white/[0.08] bg-white dark:bg-gray-900 hover:bg-gray-50 dark:hover:bg-white/[0.06] text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400 transition"
               />

@@ -904,6 +904,8 @@ interface AppState {
   setFilterDateValue: (v: string) => void
   filterDateEnd: string
   setDateRange: (start: string, end: string) => void
+  filterSourceMode: 'all' | 'gallery' | 'template' | 'batch' | 'agent'
+  setFilterSourceMode: (mode: AppState['filterSourceMode']) => void
 
   // 多选
   selectedTaskIds: string[]
@@ -1608,6 +1610,8 @@ export const useStore = create<AppState>()(
       setFilterDateValue: (filterDateValue) => set({ filterDateValue, selectedTaskIds: [] }),
       filterDateEnd: '',
       setDateRange: (filterDateValue, filterDateEnd) => set({ filterDateValue, filterDateEnd, selectedTaskIds: [] }),
+      filterSourceMode: 'all',
+      setFilterSourceMode: (filterSourceMode) => set({ filterSourceMode, selectedTaskIds: [] }),
 
       // Selection
       selectedTaskIds: [],
@@ -1849,6 +1853,18 @@ export function taskMatchesFilterStatus(task: TaskRecord, filterStatus: AppState
   if (filterStatus === 'all') return true
   if (filterStatus === 'error') return task.status === 'error' || taskHasOutputErrors(task)
   return task.status === filterStatus
+}
+
+export function getTaskSourceMode(task: TaskRecord): AppState['filterSourceMode'] {
+  if (task.sourceMode === 'agent' || task.agentConversationId || task.agentRoundId) return 'agent'
+  if (task.sourceMode === 'batch' || task.batchId) return 'batch'
+  if (task.sourceMode === 'template' || task.sourceTemplateId) return 'template'
+  return 'gallery'
+}
+
+export function taskMatchesFilterSourceMode(task: TaskRecord, filterSourceMode: AppState['filterSourceMode']) {
+  if (filterSourceMode === 'all') return true
+  return getTaskSourceMode(task) === filterSourceMode
 }
 
 /** 按生成日期筛选：today=当天，week=最近7天，month=最近30天，specific=指定区间(start~end，YYYY-MM-DD) */
@@ -2434,6 +2450,7 @@ export async function createAndExecuteTaskFromInput(opts: {
   maskTargetImageId?: string | null
   sourceTemplateId?: string
   sourceTemplateName?: string
+  sourceMode?: AppMode
   /** 仅普通提交需要：把规范化后的参数回写到输入区 params */
   syncNormalizedParamsToInput?: boolean
 }): Promise<string> {
@@ -2476,6 +2493,7 @@ export async function createAndExecuteTaskFromInput(opts: {
     transparentPrompt: transparentMeta?.effectivePrompt,
     sourceTemplateId: opts.sourceTemplateId,
     sourceTemplateName: opts.sourceTemplateName,
+    sourceMode: opts.sourceMode,
     outputImages: [],
     status: 'running',
     error: null,
@@ -2832,6 +2850,7 @@ export async function batchApplyTemplates(productImageDataUrl: string): Promise<
       inputImages,
       activeProfile,
       requestSettings,
+      sourceMode: 'template',
       sourceTemplateId: template.id,
       sourceTemplateName: template.customName,
     })

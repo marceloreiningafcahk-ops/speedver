@@ -64,7 +64,6 @@ export default function BatchWorkspace() {
   const setSettings = useStore((s) => s.setSettings)
   const params = useStore((s) => s.params)
   const tasksInStore = useStore((s) => s.tasks)
-  const [batchName, setBatchName] = useState('批量生图')
   const [commonPrompt, setCommonPrompt] = useState('')
   const [commonImages, setCommonImages] = useState<InputImage[]>([])
   const [batchParams, setBatchParams] = useState<TaskParams>(() => ({ ...params, moderation: 'auto', transparent_output: false }))
@@ -188,7 +187,6 @@ export default function BatchWorkspace() {
     setSubmitting(true)
     try {
       await submitBatchTasks({
-        batchName,
         commonPrompt,
         commonImages,
         tasks,
@@ -241,14 +239,6 @@ export default function BatchWorkspace() {
               <h3 className="text-sm font-semibold text-gray-800 dark:text-gray-100">通用设置</h3>
               <span className="truncate text-xs text-gray-400">{currentProfile?.name ?? '未配置'}</span>
             </div>
-            <label className="mb-3 block">
-              <span className="mb-1 block text-xs text-gray-500 dark:text-gray-400">批次名称</span>
-              <input
-                value={batchName}
-                onChange={(e) => setBatchName(e.target.value)}
-                className={fieldClass}
-              />
-            </label>
             <label className="mb-3 block">
               <span className="mb-1 block text-xs text-gray-500 dark:text-gray-400">通用提示词</span>
               <textarea

@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState, useEffect } from 'react'
-import { ALL_FAVORITES_COLLECTION_ID, getTaskFavoriteCollectionIds, useStore, reuseConfig, editOutputs, removeTask, taskMatchesFilterStatus, taskMatchesFilterDate, taskMatchesSearchQuery } from '../store'
+import { ALL_FAVORITES_COLLECTION_ID, getTaskFavoriteCollectionIds, useStore, reuseConfig, editOutputs, removeTask, taskMatchesFilterStatus, taskMatchesFilterDate, taskMatchesFilterSourceMode, taskMatchesSearchQuery } from '../store'
 import TaskCard from './TaskCard'
 
 export default function TaskGrid() {
@@ -10,6 +10,7 @@ export default function TaskGrid() {
   const filterDate = useStore((s) => s.filterDate)
   const filterDateValue = useStore((s) => s.filterDateValue)
   const filterDateEnd = useStore((s) => s.filterDateEnd)
+  const filterSourceMode = useStore((s) => s.filterSourceMode)
   const activeFavoriteCollectionId = useStore((s) => s.activeFavoriteCollectionId)
   const setDetailTaskId = useStore((s) => s.setDetailTaskId)
   const setConfirmDialog = useStore((s) => s.setConfirmDialog)
@@ -31,6 +32,7 @@ export default function TaskGrid() {
   const startedWithCtrl = useRef(false)
   const initialSelection = useRef<string[]>([])
   const isMac = /Mac|iPod|iPhone|iPad/.test(navigator.platform)
+  const hasActiveFilters = Boolean(searchQuery.trim()) || filterFavorite || filterStatus !== 'all' || filterDate !== 'all' || filterSourceMode !== 'all'
 
   const filteredTasks = useMemo(() => {
     const sorted = [...tasks]
@@ -45,9 +47,10 @@ export default function TaskGrid() {
       }
       if (!taskMatchesFilterStatus(t, filterStatus)) return false
       if (!taskMatchesFilterDate(t, filterDate, filterDateValue, filterDateEnd)) return false
+      if (!taskMatchesFilterSourceMode(t, filterSourceMode)) return false
       return taskMatchesSearchQuery(t, q)
     })
-  }, [tasks, searchQuery, filterStatus, filterFavorite, filterDate, filterDateValue, filterDateEnd, activeFavoriteCollectionId])
+  }, [tasks, searchQuery, filterStatus, filterFavorite, filterDate, filterDateValue, filterDateEnd, filterSourceMode, activeFavoriteCollectionId])
 
   const handleDelete = (task: typeof tasks[0]) => {
     setConfirmDialog({
@@ -261,7 +264,7 @@ export default function TaskGrid() {
   if (!filteredTasks.length) {
     return (
       <div className="text-center py-20 text-gray-400 dark:text-gray-500">
-        {searchQuery || filterFavorite ? (
+        {hasActiveFilters ? (
           <p className="text-sm">没有找到匹配的任务</p>
         ) : (
           <>
