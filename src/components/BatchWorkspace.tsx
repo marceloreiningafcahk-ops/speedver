@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { createInputImageFromFile, deleteImageIfUnreferenced, submitBatchTasks, useStore, type BatchSubmitTaskInput } from '../store'
 import type { InputImage, TaskParams } from '../types'
 import { getOutputImageLimitForSettings } from '../lib/paramCompatibility'
@@ -13,8 +13,14 @@ interface BatchDraftTask {
   fileName: string
 }
 
+const REFERENCE_IMAGE_LABELS = ['图一', '图二', '图三', '图四', '图五', '图六', '图七', '图八', '图九']
+
 function newDraftId() {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`
+}
+
+function getReferenceImageLabel(index: number) {
+  return REFERENCE_IMAGE_LABELS[index] ?? `图${index + 1}`
 }
 
 function getFileNameBase(file: File) {
@@ -72,6 +78,7 @@ export default function BatchWorkspace() {
   const [showSizePicker, setShowSizePicker] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [dragActive, setDragActive] = useState(false)
+  const pasteTargetRef = useRef<'common' | 'tasks'>('tasks')
   const [draftTasks, setDraftTasks] = useState<BatchDraftTask[]>([
     { id: newDraftId(), prompt: '', images: [], fileName: '' },
   ])
@@ -96,6 +103,10 @@ export default function BatchWorkspace() {
 
   const setBatchParam = (patch: Partial<TaskParams>) => {
     setBatchParams((current) => ({ ...current, ...patch }))
+  }
+
+  const markPasteTarget = (target: 'common' | 'tasks') => {
+    pasteTargetRef.current = target
   }
 
   useEffect(() => {
@@ -124,7 +135,7 @@ export default function BatchWorkspace() {
     }
   }
 
-  const handleCommonImageFiles = async (files: FileList | null) => {
+  const handleCommonImageFiles = async (files: FileList | File[] | null) => {
     if (!files?.length) return
     const images = await filesToInputImages(files)
     if (!images.length) return
@@ -159,7 +170,11 @@ export default function BatchWorkspace() {
         .filter((file): file is File => Boolean(file))
       if (!files.length) return
       event.preventDefault()
-      void appendImageTasks(files)
+      if (pasteTargetRef.current === 'common') {
+        void handleCommonImageFiles(files)
+      } else {
+        void appendImageTasks(files)
+      }
     }
 
     document.addEventListener('paste', handlePaste)
@@ -223,7 +238,12 @@ export default function BatchWorkspace() {
       )}
 
       <div className="grid gap-4 lg:grid-cols-[360px_1fr]">
-        <section className="space-y-4">
+        <section
+          className="space-y-4"
+          onMouseEnter={() => markPasteTarget('common')}
+          onPointerDown={() => markPasteTarget('common')}
+          onFocusCapture={() => markPasteTarget('common')}
+        >
           <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm dark:border-white/[0.08] dark:bg-gray-900">
             <div className="mb-3 flex items-center justify-between gap-3">
               <h3 className="text-sm font-semibold text-gray-800 dark:text-gray-100">通用设置</h3>
@@ -352,13 +372,22 @@ export default function BatchWorkspace() {
           </div>
         </section>
 
-        <section className="space-y-4">
+        <section
+          className="space-y-4"
+          onMouseEnter={() => markPasteTarget('tasks')}
+          onPointerDown={() => markPasteTarget('tasks')}
+          onFocusCapture={() => markPasteTarget('tasks')}
+        >
           <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm dark:border-white/[0.08] dark:bg-gray-900">
             <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <h3 className="text-sm font-semibold text-gray-800 dark:text-gray-100">任务列表</h3>
                 <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">{readyTaskCount} 个可提交任务</p>
               </div>
+              <label className="cursor-pointer rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-600 transition hover:bg-gray-50 dark:border-white/[0.08] dark:text-gray-300 dark:hover:bg-white/[0.04]">
+                多任务拆图
+                <input type="file" accept="image/*" multiple className="hidden" onChange={(e) => void appendImageTasks(e.target.files)} />
+              </label>
             </div>
 
             <div className="mb-4 rounded-lg border border-dashed border-gray-300 bg-gray-50 px-4 py-5 text-center text-sm text-gray-500 dark:border-white/[0.12] dark:bg-white/[0.03] dark:text-gray-400">
@@ -387,10 +416,12 @@ export default function BatchWorkspace() {
                     className="mb-3 w-full resize-none rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm outline-none transition focus:border-blue-400 dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-gray-100"
                   />
                   <div className="mb-3 grid grid-cols-3 gap-2">
-                    <div className="flex h-16 w-16 flex-col items-center justify-center rounded-lg border border-dashed border-blue-300 bg-blue-50/70 text-[10px] font-medium text-blue-600 dark:border-blue-400/40 dark:bg-blue-500/10 dark:text-blue-200">
-                      <span>图一</span>
-                      <span>{commonImages.length ? `通用参考 x${commonImages.length}` : '通用参考'}</span>
-                    </div>
+                    {Array.from({ length: Math.max(1, commonImages.length) }).map((_, commonIndex) => (
+                      <div key={`common-${commonIndex}`} className="flex h-16 w-16 flex-col items-center justify-center rounded-lg border border-dashed border-blue-300 bg-blue-50/70 text-[10px] font-medium text-blue-600 dark:border-blue-400/40 dark:bg-blue-500/10 dark:text-blue-200">
+                        <span>{getReferenceImageLabel(commonIndex)}</span>
+                        <span>通用参考</span>
+                      </div>
+                    ))}
                     {task.images.map((image) => (
                       <ImageThumb
                         key={image.id}
