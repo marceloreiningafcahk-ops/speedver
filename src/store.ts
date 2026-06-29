@@ -17,7 +17,7 @@ import type {
   ResponsesOutputItem,
 } from './types'
 import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_PARAMS } from './types'
-import { DEFAULT_SETTINGS, getActiveApiProfile, getAgentImageApiProfile, getAgentTextApiProfile, getCustomProviderDefinition, mergeImportedSettings, normalizeSettings, validateApiProfile } from './lib/apiProfiles'
+import { DEFAULT_SETTINGS, getActiveApiProfile, getAgentImageApiProfile, getAgentTextApiProfile, getCustomProviderDefinition, getTemplateApiProfile, mergeImportedSettings, normalizeSettings, validateApiProfile } from './lib/apiProfiles'
 import { dismissAllTooltips } from './lib/tooltipDismiss'
 import { remapImageMentionsForOrder, replaceImageMentionsForApi } from './lib/promptImageMentions'
 import {
@@ -53,7 +53,7 @@ import { orderInputImagesForMask } from './lib/mask'
 import { getChangedParams, normalizeParamsForSettings } from './lib/paramCompatibility'
 import { createTransparentOutputMeta, getTransparentRequestParams, removeKeyedBackgroundFromDataUrl } from './lib/transparentImage'
 import { blobToDataUrl, fileToDataUrl } from './lib/dataUrl'
-import { formatExportFileTime } from './lib/exportFileName'
+import { formatExportFileTime, sanitizeFileNamePart } from './lib/exportFileName'
 import { buildExportZip, readExportZip, readExportZipFileAsDataUrl } from './lib/exportZip'
 
 export const ALL_FAVORITES_COLLECTION_ID = '__all_favorites__'
@@ -119,7 +119,7 @@ function isErrorToastTitle(title: string): boolean {
   return /(?:失败|错误|异常|报错|无法|不能|超时|中断|断开|请先|请输入|已达上限|不存在|已丢失)$/.test(title)
 }
 
-export type SettingsTab = 'general' | 'agent' | 'api' | 'data' | 'about'
+export type SettingsTab = 'general' | 'template' | 'api' | 'data' | 'about'
 
 const TIMEOUT_STREAMING_HINT = '也可尝试打开「流式传输」，并提高「请求中间步骤图像数」来维持连接。'
 const TIMEOUT_PARTIAL_IMAGES_ZERO_HINT = '官方流式接口不发送心跳，当前「请求中间步骤图像数」为 0，连接可能因无数据传输而断开。建议提高到 2 或 3。'
@@ -568,6 +568,8 @@ export function migratePersistedState(persistedState: unknown): unknown {
   if (!isRecord(persistedState)) return persistedState
   return {
     ...persistedState,
+    // Agent 已从主导航移除，恢复时落回生图模式，避免卡在无入口的界面
+    ...(persistedState.appMode === 'agent' ? { appMode: 'gallery' } : {}),
     agentConversations: stripPersistedAgentConversations(persistedState.agentConversations),
   }
 }
@@ -855,6 +857,19 @@ interface AppState {
   favoritePickerTaskIds: string[] | null
   openFavoritePicker: (taskIds: string[]) => void
   closeFavoritePicker: () => void
+  templatePickerTaskIds: string[] | null
+  openTemplatePicker: (taskIds: string[]) => void
+  closeTemplatePicker: () => void
+  // 保存为模板弹窗
+  showSaveTemplateModal: boolean
+  setShowSaveTemplateModal: (v: boolean) => void
+  // 模板模式：选中的模板卡片 + 批量套用弹窗
+  selectedTemplateIds: string[]
+  toggleTemplateSelection: (id: string, force?: boolean) => void
+  setSelectedTemplateIds: (ids: string[] | ((prev: string[]) => string[])) => void
+  clearTemplateSelection: () => void
+  showTemplateApplyModal: boolean
+  setShowTemplateApplyModal: (v: boolean) => void
   streamPreviews: Record<string, string>
   streamPreviewSlots: Record<string, Record<string, string>>
   setTaskStreamPreview: (taskId: string, image?: string, requestIndex?: number) => void
@@ -866,6 +881,12 @@ interface AppState {
   setFilterStatus: (status: AppState['filterStatus']) => void
   filterFavorite: boolean
   setFilterFavorite: (f: boolean) => void
+  filterDate: 'all' | 'today' | 'week' | 'month' | 'specific'
+  setFilterDate: (d: AppState['filterDate']) => void
+  filterDateValue: string
+  setFilterDateValue: (v: string) => void
+  filterDateEnd: string
+  setDateRange: (start: string, end: string) => void
 
   // 多选
   selectedTaskIds: string[]
@@ -1149,7 +1170,7 @@ export const useStore = create<AppState>()(
       // Mode
       appMode: 'gallery',
       setAppMode: (appMode) => {
-        if (appMode === 'gallery') {
+        if (appMode === 'gallery' || appMode === 'template') {
           const state = get()
           const agentInputDrafts = saveActiveAgentInputDrafts(state)
           const galleryInputDraft = saveGalleryInputDraft(state)
@@ -1206,7 +1227,7 @@ export const useStore = create<AppState>()(
             confirmText: '去设置',
             cancelText: '取消',
             action: () => {
-              useStore.getState().setShowSettings(true, 'agent')
+              useStore.getState().setShowSettings(true, 'api')
             },
           })
           return
@@ -1507,6 +1528,32 @@ export const useStore = create<AppState>()(
         set({ favoritePickerTaskIds: Array.from(new Set(taskIds)).filter(Boolean) })
       },
       closeFavoritePicker: () => set({ favoritePickerTaskIds: null }),
+      templatePickerTaskIds: null,
+      openTemplatePicker: (taskIds) => {
+        if (!taskIds.length) return
+        dismissAllTooltips()
+        set({ templatePickerTaskIds: Array.from(new Set(taskIds)).filter(Boolean) })
+      },
+      closeTemplatePicker: () => set({ templatePickerTaskIds: null }),
+      showSaveTemplateModal: false,
+      setShowSaveTemplateModal: (v) => set({ showSaveTemplateModal: v }),
+      selectedTemplateIds: [],
+      toggleTemplateSelection: (id, force) => set((s) => {
+        const has = s.selectedTemplateIds.includes(id)
+        const shouldSelect = force ?? !has
+        if (shouldSelect === has) return s
+        return {
+          selectedTemplateIds: shouldSelect
+            ? [...s.selectedTemplateIds, id]
+            : s.selectedTemplateIds.filter((x) => x !== id),
+        }
+      }),
+      clearTemplateSelection: () => set({ selectedTemplateIds: [] }),
+      setSelectedTemplateIds: (updater) => set((s) => ({
+        selectedTemplateIds: typeof updater === 'function' ? updater(s.selectedTemplateIds) : updater,
+      })),
+      showTemplateApplyModal: false,
+      setShowTemplateApplyModal: (v) => set({ showTemplateApplyModal: v }),
       streamPreviews: {},
       streamPreviewSlots: {},
       setTaskStreamPreview: (taskId, image, requestIndex = 0) => set((s) => {
@@ -1538,6 +1585,12 @@ export const useStore = create<AppState>()(
       setFilterStatus: (filterStatus) => set({ filterStatus }),
       filterFavorite: false,
       setFilterFavorite: (filterFavorite) => set(filterFavorite ? { filterFavorite, selectedTaskIds: [], selectedFavoriteCollectionIds: [] } : { filterFavorite, activeFavoriteCollectionId: null, selectedTaskIds: [], selectedFavoriteCollectionIds: [] }),
+      filterDate: 'all',
+      setFilterDate: (filterDate) => set({ filterDate, selectedTaskIds: [] }),
+      filterDateValue: '',
+      setFilterDateValue: (filterDateValue) => set({ filterDateValue, selectedTaskIds: [] }),
+      filterDateEnd: '',
+      setDateRange: (filterDateValue, filterDateEnd) => set({ filterDateValue, filterDateEnd, selectedTaskIds: [] }),
 
       // Selection
       selectedTaskIds: [],
@@ -1779,6 +1832,35 @@ export function taskMatchesFilterStatus(task: TaskRecord, filterStatus: AppState
   if (filterStatus === 'all') return true
   if (filterStatus === 'error') return task.status === 'error' || taskHasOutputErrors(task)
   return task.status === filterStatus
+}
+
+/** 按生成日期筛选：today=当天，week=最近7天，month=最近30天，specific=指定区间(start~end，YYYY-MM-DD) */
+export function taskMatchesFilterDate(task: TaskRecord, filterDate: AppState['filterDate'], dateStart = '', dateEnd = '') {
+  if (filterDate === 'all') return true
+  const now = new Date()
+  if (filterDate === 'today') {
+    const start = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
+    return task.createdAt >= start
+  }
+  if (filterDate === 'specific') {
+    if (!dateStart && !dateEnd) return true
+    return isTaskCreatedInRange(task, dateStart, dateEnd)
+  }
+  const days = filterDate === 'week' ? 7 : 30
+  return task.createdAt >= now.getTime() - days * 24 * 60 * 60 * 1000
+}
+
+/** 判断任务是否在指定本地日期区间内生成（含首尾两天）。start/end 形如 YYYY-MM-DD，可只传其一 */
+export function isTaskCreatedInRange(task: TaskRecord, dateStart: string, dateEnd: string) {
+  // 区间为空当作不限制；只传一个则退化为单天
+  const s = dateStart || dateEnd
+  const e = dateEnd || dateStart
+  const [sy, sm, sd] = s.split('-').map(Number)
+  const [ey, em, ed] = e.split('-').map(Number)
+  if (!sy || !sm || !sd || !ey || !em || !ed) return true
+  const startTs = new Date(sy, sm - 1, sd).getTime()
+  const endTs = new Date(ey, em - 1, ed + 1).getTime() // 终点当天 23:59:59 => 次日零点前
+  return task.createdAt >= startTs && task.createdAt < endTs
 }
 
 export function taskMatchesSearchQuery(task: TaskRecord, query: string) {
@@ -2320,6 +2402,80 @@ export async function initStore() {
 }
 
 /** 提交新任务 */
+/**
+ * 从给定的 prompt + params + inputImages 创建一个普通生成任务并执行。
+ * 复用了原 submitTask 的「存输入图 + 规范化参数 + 透明背景 + 建 TaskRecord + putTask + setTasks + executeTask」核心，
+ * 供普通提交和模板批量套用共用。调用方需自行完成 API 配置解析与校验。
+ */
+export async function createAndExecuteTaskFromInput(opts: {
+  prompt: string
+  params: TaskParams
+  inputImages: InputImage[]
+  activeProfile: ApiProfile
+  requestSettings: AppSettings
+  maskImageId?: string | null
+  maskTargetImageId?: string | null
+  sourceTemplateId?: string
+  sourceTemplateName?: string
+  /** 仅普通提交需要：把规范化后的参数回写到输入区 params */
+  syncNormalizedParamsToInput?: boolean
+}): Promise<string> {
+  // 持久化输入图片到 IndexedDB（此前可能只在内存缓存中）
+  for (const img of opts.inputImages) {
+    await storeImage(img.dataUrl)
+  }
+
+  const normalizedParams = normalizeParamsForSettings(opts.params, opts.requestSettings, { hasInputImages: opts.inputImages.length > 0 })
+  const shouldUseTransparentOutput = normalizedParams.output_format === 'png' && normalizedParams.transparent_output
+  const taskParams = shouldUseTransparentOutput
+    ? getTransparentRequestParams(normalizedParams)
+    : { ...normalizedParams, transparent_output: false }
+  const trimmedPrompt = opts.prompt.trim()
+  const transparentMeta = taskParams.transparent_output
+    ? createTransparentOutputMeta(trimmedPrompt)
+    : null
+
+  if (opts.syncNormalizedParamsToInput) {
+    const normalizedParamPatch = getChangedParams(opts.params, taskParams)
+    if (Object.keys(normalizedParamPatch).length) {
+      useStore.getState().setParams(normalizedParamPatch)
+    }
+  }
+
+  const taskId = genId()
+  const task: TaskRecord = {
+    id: taskId,
+    prompt: trimmedPrompt,
+    params: taskParams,
+    apiProvider: opts.activeProfile.provider,
+    apiProfileId: opts.activeProfile.id,
+    apiProfileName: opts.activeProfile.name,
+    apiMode: opts.activeProfile.apiMode,
+    apiModel: opts.activeProfile.model,
+    inputImageIds: opts.inputImages.map((i) => i.id),
+    maskTargetImageId: opts.maskTargetImageId ?? null,
+    maskImageId: opts.maskImageId ?? null,
+    transparentOutput: transparentMeta?.transparentOutput,
+    transparentPrompt: transparentMeta?.effectivePrompt,
+    sourceTemplateId: opts.sourceTemplateId,
+    sourceTemplateName: opts.sourceTemplateName,
+    outputImages: [],
+    status: 'running',
+    error: null,
+    createdAt: Date.now(),
+    finishedAt: null,
+    elapsed: null,
+  }
+
+  const latestTasks = useStore.getState().tasks
+  useStore.getState().setTasks([task, ...latestTasks])
+  await putTask(task)
+
+  // 异步调用 API
+  executeTask(taskId)
+  return taskId
+}
+
 export async function submitTask(options: { allowFullMask?: boolean; useCurrentApiProfileWhenReusedMissing?: boolean } = {}) {
   const { settings, prompt, inputImages, maskDraft, params, reusedTaskApiProfileId, reusedTaskApiProfileName, reusedTaskApiProfileMissing, showToast, setConfirmDialog } =
     useStore.getState()
@@ -2393,50 +2549,16 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
     }
   }
 
-  // 持久化输入图片到 IndexedDB（此前只在内存缓存中）
-  for (const img of orderedInputImages) {
-    await storeImage(img.dataUrl)
-  }
-
-  const normalizedParams = normalizeParamsForSettings(params, requestSettings, { hasInputImages: orderedInputImages.length > 0 })
-  const shouldUseTransparentOutput = normalizedParams.output_format === 'png' && normalizedParams.transparent_output
-  const taskParams = shouldUseTransparentOutput
-    ? getTransparentRequestParams(normalizedParams)
-    : { ...normalizedParams, transparent_output: false }
-  const transparentMeta = taskParams.transparent_output
-    ? createTransparentOutputMeta(prompt.trim())
-    : null
-  const normalizedParamPatch = getChangedParams(params, taskParams)
-  if (Object.keys(normalizedParamPatch).length) {
-    useStore.getState().setParams(normalizedParamPatch)
-  }
-
-  const taskId = genId()
-  const task: TaskRecord = {
-    id: taskId,
-    prompt: prompt.trim(),
-    params: taskParams,
-    apiProvider: activeProfile.provider,
-    apiProfileId: activeProfile.id,
-    apiProfileName: activeProfile.name,
-    apiMode: activeProfile.apiMode,
-    apiModel: activeProfile.model,
-    inputImageIds: orderedInputImages.map((i) => i.id),
-    maskTargetImageId,
+  await createAndExecuteTaskFromInput({
+    prompt,
+    params,
+    inputImages: orderedInputImages,
+    activeProfile,
+    requestSettings,
     maskImageId,
-    transparentOutput: transparentMeta?.transparentOutput,
-    transparentPrompt: transparentMeta?.effectivePrompt,
-    outputImages: [],
-    status: 'running',
-    error: null,
-    createdAt: Date.now(),
-    finishedAt: null,
-    elapsed: null,
-  }
-
-  const latestTasks = useStore.getState().tasks
-  useStore.getState().setTasks([task, ...latestTasks])
-  await putTask(task)
+    maskTargetImageId,
+    syncNormalizedParamsToInput: true,
+  })
   useStore.getState().showToast('任务已提交', 'success')
 
   if (settings.clearInputAfterSubmit) {
@@ -2444,9 +2566,149 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
     useStore.getState().clearInputImages()
   }
   useStore.getState().setReusedTaskApiProfile(null)
+}
 
-  // 异步调用 API
-  executeTask(taskId)
+/**
+ * 把当前输入区的 prompt + params + inputImages 保存为模板（kind:'template'）。
+ * 不调用 API、不创建普通画廊任务。replaceableIndex 标记可替换的材质/产品图位。
+ */
+export async function saveCurrentInputAsTemplate(opts: {
+  replaceableIndex: number
+  coverIndex?: number
+  name?: string
+  color?: string
+  collectionIds?: string[]
+  /** 所属分组：null/未传为未分组；新建分组时传新 id + collectionName */
+  templateCollectionId?: string | null
+  templateCollectionName?: string
+}): Promise<boolean> {
+  const { prompt, inputImages, params, showToast } = useStore.getState()
+  const trimmedPrompt = prompt.trim()
+  if (!trimmedPrompt) {
+    showToast('请先输入提示词', 'error')
+    return false
+  }
+  if (!inputImages.length) {
+    showToast('请先添加模板参考图', 'error')
+    return false
+  }
+  if (opts.replaceableIndex < 0 || opts.replaceableIndex >= inputImages.length) {
+    showToast('请选择需要替换的材质 / 产品图位', 'error')
+    return false
+  }
+
+  // 持久化输入图片到 IndexedDB
+  for (const img of inputImages) {
+    await storeImage(img.dataUrl)
+  }
+
+  const name = opts.name?.trim()
+  const color = opts.color?.trim()
+  const collectionIds = normalizeFavoriteCollectionIds(opts.collectionIds ?? [])
+  const replaceableImageId = inputImages[opts.replaceableIndex]?.id ?? null
+  // 封面：用户可从参考图里另选一张；未指定或越界时回退到可替换图位
+  const coverIndex = opts.coverIndex != null && opts.coverIndex >= 0 && opts.coverIndex < inputImages.length
+    ? opts.coverIndex
+    : opts.replaceableIndex
+  const coverImageId = inputImages[coverIndex]?.id ?? replaceableImageId
+  const template: TaskRecord = {
+    id: genId(),
+    kind: 'template',
+    prompt: trimmedPrompt,
+    params: { ...params },
+    inputImageIds: inputImages.map((i) => i.id),
+    templateReplaceImageIndex: opts.replaceableIndex,
+    templateCoverImageId: coverImageId,
+    templateCollectionId: opts.templateCollectionId || null,
+    templateCollectionName: opts.templateCollectionId ? (opts.templateCollectionName?.trim() || undefined) : undefined,
+    customName: name || undefined,
+    customColor: color || undefined,
+    favoriteCollectionIds: collectionIds.length ? collectionIds : undefined,
+    outputImages: [],
+    status: 'done',
+    error: null,
+    createdAt: Date.now(),
+    finishedAt: Date.now(),
+    elapsed: null,
+  }
+
+  const latestTasks = useStore.getState().tasks
+  useStore.getState().setTasks([template, ...latestTasks])
+  await putTask(template)
+  showToast('已保存为模板', 'success')
+  return true
+}
+
+/**
+ * 批量套用模板：用户上传一张材质/产品图，对每个选中模板，
+ * 保留固定参考图、只替换 templateReplaceImageIndex 图位（保持顺序，@图N 不错乱），
+ * 复用 createAndExecuteTaskFromInput 创建普通生成任务。
+ */
+export async function batchApplyTemplates(productImageDataUrl: string): Promise<boolean> {
+  const state = useStore.getState()
+  const { settings, tasks, selectedTemplateIds, showToast } = state
+  const templates = selectedTemplateIds
+    .map((id) => tasks.find((t) => t.id === id && t.kind === 'template'))
+    .filter((t): t is TaskRecord => Boolean(t))
+  if (!templates.length) {
+    showToast('请先选择模板', 'error')
+    return false
+  }
+
+  const normalizedSettings = normalizeSettings(settings)
+  const activeProfile = getTemplateApiProfile(normalizedSettings)
+  if (validateApiProfile(activeProfile)) {
+    showToast(`请先完善请求 API 配置：${validateApiProfile(activeProfile)}`, 'error')
+    useStore.getState().setShowSettings(true)
+    return false
+  }
+  const requestSettings = createSettingsForApiProfile(normalizedSettings, activeProfile)
+
+  // 存储上传的产品图，得到去重后的 image id
+  const productImageId = await storeImage(productImageDataUrl)
+  cacheImage(productImageId, productImageDataUrl)
+
+  let created = 0
+  for (const template of templates) {
+    // 读取模板每张参考图的 dataUrl，并在替换图位换成产品图
+    const replaceIndex = template.templateReplaceImageIndex ?? template.inputImageIds.length - 1
+    const inputImages: InputImage[] = []
+    let missing = false
+    for (let i = 0; i < template.inputImageIds.length; i++) {
+      if (i === replaceIndex) {
+        inputImages.push({ id: productImageId, dataUrl: productImageDataUrl })
+        continue
+      }
+      const id = template.inputImageIds[i]
+      const dataUrl = await ensureImageCached(id)
+      if (!dataUrl) {
+        missing = true
+        break
+      }
+      inputImages.push({ id, dataUrl })
+    }
+    if (missing) {
+      showToast(`模板「${template.customName || template.prompt.slice(0, 8)}」的参考图缺失，已跳过`, 'error')
+      continue
+    }
+
+    await createAndExecuteTaskFromInput({
+      prompt: template.prompt,
+      params: template.params,
+      inputImages,
+      activeProfile,
+      requestSettings,
+      sourceTemplateId: template.id,
+      sourceTemplateName: template.customName,
+    })
+    created++
+  }
+
+  if (created > 0) {
+    useStore.getState().clearTemplateSelection()
+    showToast(`已批量创建 ${created} 个生成任务`, 'success')
+  }
+  return created > 0
 }
 
 function getActiveAgentConversation(): AgentConversation {
@@ -3235,7 +3497,7 @@ export async function submitAgentMessage() {
   const agentValidationError = getAgentProfileValidationError(normalizedSettings)
   if (agentValidationError) {
     showToast(`请先完善 Agent API 配置：${agentValidationError.message}`, 'error')
-    state.setShowSettings(true, normalizedSettings.agentApiConfigMode === 'off' ? 'api' : 'agent')
+    state.setShowSettings(true, 'api')
     return
   }
 
@@ -3384,7 +3646,7 @@ export async function regenerateAgentAssistantMessage(conversationId: string, ro
   const agentValidationError = getAgentProfileValidationError(normalizedSettings)
   if (agentValidationError) {
     showToast(`请先完善 Agent API 配置：${agentValidationError.message}`, 'error')
-    state.setShowSettings(true, normalizedSettings.agentApiConfigMode === 'off' ? 'api' : 'agent')
+    state.setShowSettings(true, 'api')
     return
   }
 
@@ -4545,6 +4807,110 @@ export function updateTaskInStore(taskId: string, patch: Partial<TaskRecord>) {
   if (task) putTask(task)
 }
 
+/** 重命名一个模板分组（更新该组内所有模板的 templateCollectionName 并持久化） */
+export async function renameTemplateCollection(collectionId: string, name: string) {
+  if (!collectionId) return
+  const trimmed = name.trim()
+  const { tasks, setTasks } = useStore.getState()
+  const changed: TaskRecord[] = []
+  const updated = tasks.map((t) => {
+    if (t.kind === 'template' && t.templateCollectionId === collectionId) {
+      const next = { ...t, templateCollectionName: trimmed || undefined }
+      changed.push(next)
+      return next
+    }
+    return t
+  })
+  if (!changed.length) return
+  setTasks(updated)
+  for (const t of changed) await putTask(t)
+}
+
+export interface TemplateCollectionInfo {
+  id: string
+  name: string
+  count: number
+}
+
+/** 列出现有模板分组（去重 collectionId，名称取组内最新非空名） */
+export function getTemplateCollections(): TemplateCollectionInfo[] {
+  const { tasks } = useStore.getState()
+  const byId = new Map<string, TemplateCollectionInfo>()
+  for (const t of tasks) {
+    if (t.kind !== 'template' || !t.templateCollectionId) continue
+    const existing = byId.get(t.templateCollectionId)
+    const name = t.templateCollectionName?.trim()
+    if (existing) {
+      existing.count++
+      if (name) existing.name = name
+    } else {
+      byId.set(t.templateCollectionId, { id: t.templateCollectionId, name: name || '导入的模板', count: 1 })
+    }
+  }
+  return Array.from(byId.values())
+}
+
+/**
+ * 把若干模板移动到目标分组。
+ * collectionId 为 null 表示移到「未分组」；collectionName 为新建/重命名时的显示名。
+ */
+export async function moveTemplatesToCollection(templateIds: string[], collectionId: string | null, collectionName?: string) {
+  const ids = new Set(templateIds)
+  if (!ids.size) return
+  const trimmedName = collectionName?.trim()
+  const { tasks, setTasks } = useStore.getState()
+  const changed: TaskRecord[] = []
+  const updated = tasks.map((t) => {
+    if (t.kind === 'template' && ids.has(t.id)) {
+      const next: TaskRecord = {
+        ...t,
+        templateCollectionId: collectionId,
+        templateCollectionName: collectionId ? (trimmedName || undefined) : undefined,
+      }
+      changed.push(next)
+      return next
+    }
+    return t
+  })
+  if (!changed.length) return
+  setTasks(updated)
+  for (const t of changed) await putTask(t)
+}
+
+/** 删除整个模板组：collectionId 为 null 表示删除「未分组」的所有模板，连同孤立图片一起清理 */
+export async function removeTemplateCollection(collectionId: string | null) {
+  const { tasks, setTasks, inputImages, galleryInputDraft, selectedTemplateIds, setSelectedTemplateIds, showToast } = useStore.getState()
+  const targets = tasks.filter((t) => t.kind === 'template' && (t.templateCollectionId || null) === collectionId)
+  if (!targets.length) return
+
+  // 收集待删模板关联的图片
+  const removedImageIds = new Set<string>()
+  for (const t of targets) addTaskReferencedImageIds(removedImageIds, t)
+
+  const targetIds = new Set(targets.map((t) => t.id))
+  const remaining = tasks.filter((t) => !targetIds.has(t.id))
+  setTasks(remaining)
+  for (const id of targetIds) await dbDeleteTask(id)
+
+  // 找出其他任务/输入仍引用的图片，避免误删共享图片
+  const stillUsed = new Set<string>()
+  for (const t of remaining) addTaskReferencedImageIds(stillUsed, t)
+  addAgentReferencedImageIds(stillUsed)
+  addInputDraftReferencedImageIds(stillUsed, galleryInputDraft)
+  for (const img of inputImages) stillUsed.add(img.id)
+
+  for (const imgId of removedImageIds) {
+    if (!stillUsed.has(imgId)) {
+      await deleteImage(imgId)
+      imageCache.delete(imgId)
+      thumbnailCache.delete(imgId)
+    }
+  }
+
+  setSelectedTemplateIds(selectedTemplateIds.filter((id) => !targetIds.has(id)))
+  showToast(`已删除分组内 ${targets.length} 个模板`, 'success')
+}
+
 function normalizeFavoriteCollectionIds(ids: unknown) {
   if (!Array.isArray(ids)) return []
   return Array.from(new Set(ids.map(String).filter((id) => id && id !== ALL_FAVORITES_COLLECTION_ID)))
@@ -4953,13 +5319,30 @@ export async function clearData(options: ClearOptions = { clearConfig: true, cle
   const { setTasks, clearInputImages, clearMaskDraft, setSettings, setParams, showToast } = useStore.getState()
 
   if (options.clearTasks) {
-    await dbClearTasks()
+    // 生图管理只清除普通生图任务，模板（kind:'template'）保留
+    const allTasks = await getAllTasks()
+    const galleryTasks = allTasks.filter((t) => t.kind !== 'template')
+    const remainingTasks = allTasks.filter((t) => t.kind === 'template')
+
+    for (const task of galleryTasks) {
+      await dbDeleteTask(task.id)
+    }
     await dbClearAgentConversations()
-    await clearImages()
-    imageCache.clear()
-    thumbnailCache.clear()
-    thumbnailBackfillIds.clear()
-    setTasks([])
+
+    // 计算被保留任务（模板）仍引用的图片，避免误删模板封面/参考图
+    const stillUsed = new Set<string>()
+    for (const t of remainingTasks) addTaskReferencedImageIds(stillUsed, t)
+    const galleryImageIds = new Set<string>()
+    for (const t of galleryTasks) addTaskReferencedImageIds(galleryImageIds, t)
+    for (const imgId of galleryImageIds) {
+      if (stillUsed.has(imgId)) continue
+      await deleteImage(imgId)
+      imageCache.delete(imgId)
+      thumbnailCache.delete(imgId)
+      thumbnailBackfillIds.delete(imgId)
+    }
+
+    setTasks(remainingTasks)
     useStore.setState({
       agentConversations: [],
       activeAgentConversationId: null,
@@ -5040,8 +5423,25 @@ export interface ExportOptions {
 /** 导出数据为 ZIP */
 export async function exportData(options: ExportOptions = { exportConfig: true, exportTasks: true }) {
   try {
-    const tasks = options.exportTasks ? await getAllTasks() : []
-    const images = options.exportTasks ? await getAllImages() : []
+    const allExportTasks = options.exportTasks ? await getAllTasks() : []
+    // 生图管理只管普通生图任务，模板由「批量模板配置」单独导出
+    const tasks = allExportTasks.filter((task) => task.kind !== 'template')
+    const templateImageIds = collectTemplateImageIds(allExportTasks.filter((task) => task.kind === 'template'))
+    const nonTemplateTaskImageIds = new Set<string>()
+    for (const task of tasks) {
+      for (const id of [
+        ...(task.inputImageIds || []),
+        ...(task.maskImageId ? [task.maskImageId] : []),
+        ...(task.outputImages || []),
+        ...(task.transparentOriginalImages || []),
+        ...(task.streamPartialImageIds || []),
+      ]) {
+        if (id) nonTemplateTaskImageIds.add(id)
+      }
+    }
+    const allImages = options.exportTasks ? await getAllImages() : []
+    // 排除仅被模板引用、未被任何普通任务使用的图片
+    const images = allImages.filter((img) => !templateImageIds.has(img.id) || nonTemplateTaskImageIds.has(img.id))
     const { settings, agentConversations, favoriteCollections, defaultFavoriteCollectionId } = useStore.getState()
     const exportedAt = Date.now()
     const thumbnailsByImageId = new Map<string, NonNullable<Awaited<ReturnType<typeof getImageThumbnail>>>>()
@@ -5066,6 +5466,7 @@ export async function exportData(options: ExportOptions = { exportConfig: true, 
       exportedAt,
       settings,
       tasks,
+      templates: [],
       images,
       thumbnailsByImageId,
       favoriteCollections,
@@ -5142,6 +5543,8 @@ export async function importData(file: File, options: ImportOptions = { importCo
         await putTask(task)
       }
 
+      // 生图管理只导入普通生图任务；模板请用「批量模板配置」导入
+
       const tasks = await getAllTasks()
       const state = useStore.getState()
       const importedCollections = normalizeFavoriteCollections(data.favoriteCollections)
@@ -5197,6 +5600,230 @@ export async function importData(file: File, options: ImportOptions = { importCo
         'error',
       )
     return false
+  }
+}
+
+/** 收集模板引用到的图片 id（参考图 + 封面图） */
+function collectTemplateImageIds(templates: TaskRecord[]): Set<string> {
+  const ids = new Set<string>()
+  for (const template of templates) {
+    for (const id of template.inputImageIds || []) if (id) ids.add(id)
+    if (template.templateCoverImageId) ids.add(template.templateCoverImageId)
+  }
+  return ids
+}
+
+/** 仅导出模板（含参考图、封面、名称、颜色、可替换图位），不含普通任务/配置 */
+/**
+ * 导出模板。collectionIds 省略（undefined）时导出全部模板；
+ * 传入数组只导出选中的分组（数组元素为 null 表示「未分组」），可多选。
+ */
+export async function exportTemplates(collectionIds?: Array<string | null>): Promise<void> {
+  try {
+    const allTasks = await getAllTasks()
+    const allTemplates = allTasks.filter((task) => task.kind === 'template')
+    const selected = collectionIds === undefined ? null : new Set(collectionIds)
+    const templates = selected === null
+      ? allTemplates
+      : allTemplates.filter((task) => selected.has(task.templateCollectionId || null))
+    if (!templates.length) {
+      useStore.getState().showToast('没有可导出的模板', 'info')
+      return
+    }
+
+    const referencedImageIds = collectTemplateImageIds(templates)
+    const allImages = await getAllImages()
+    const images = allImages.filter((img) => referencedImageIds.has(img.id))
+    const { settings } = useStore.getState()
+    const exportedAt = Date.now()
+    const thumbnailsByImageId = new Map<string, NonNullable<Awaited<ReturnType<typeof getImageThumbnail>>>>()
+
+    for (const img of images) {
+      const thumbnail = await getImageThumbnail(img.id)
+      if (thumbnail?.thumbnailDataUrl) {
+        thumbnailsByImageId.set(img.id, thumbnail)
+        cacheThumbnail(img.id, {
+          dataUrl: thumbnail.thumbnailDataUrl,
+          width: thumbnail.width,
+          height: thumbnail.height,
+          thumbnailVersion: thumbnail.thumbnailVersion,
+        })
+      }
+    }
+
+    // 复用 buildExportZip：普通任务留空，仅写入模板分区
+    const { bytes: zipped } = buildExportZip({
+      options: { exportConfig: false, exportTasks: true },
+      exportedAt,
+      settings,
+      tasks: [],
+      templates,
+      images,
+      thumbnailsByImageId,
+      favoriteCollections: [],
+      defaultFavoriteCollectionId: null,
+      agentConversations: [],
+    })
+    const blob = new Blob([zipped.buffer as ArrayBuffer], { type: 'application/zip' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    // 文件名后缀：单选某个分组时带上组名，多选或全部则不带
+    let groupSuffix = ''
+    if (selected !== null && selected.size === 1) {
+      const only = Array.from(selected)[0]
+      const groupName = only === null
+        ? '未分组'
+        : (templates.find((t) => t.templateCollectionName?.trim())?.templateCollectionName?.trim() || '导入的模板')
+      groupSuffix = `-${sanitizeFileNamePart(groupName)}`
+    }
+    a.href = url
+    a.download = `gpt-image-playground-templates${groupSuffix}_${formatExportFileTime(new Date(exportedAt))}.zip`
+    a.click()
+    URL.revokeObjectURL(url)
+    useStore.getState().showToast(`已导出 ${templates.length} 个模板`, 'success')
+  } catch (e) {
+    useStore.getState().showToast(`导出模板失败：${e instanceof Error ? e.message : String(e)}`, 'error')
+  }
+}
+
+/**
+ * 仅导入模板：读取模板 ZIP，还原模板及其参考图。
+ * 本次导入的模板归入同一个新建文件夹（templateCollectionId），与其他来源分开。
+ */
+async function importTemplatesFromFile(file: File): Promise<{ count: number; imageIds: string[] }> {
+  const buffer = await file.arrayBuffer()
+  const { manifest: data, files } = readExportZip(new Uint8Array(buffer))
+  const templates = (data.templates ?? []).filter((task) => task.kind === 'template')
+  if (!templates.length) return { count: 0, imageIds: [] }
+
+  // 还原模板引用到的图片（含缩略图）
+  const referencedImageIds = collectTemplateImageIds(templates)
+  const importedImageIds: string[] = []
+  for (const [id, info] of Object.entries(data.imageFiles ?? {})) {
+    if (!referencedImageIds.has(id)) continue
+    const dataUrl = readExportZipFileAsDataUrl(files, info.path)
+    if (!dataUrl) continue
+    await putImage({ id, dataUrl, createdAt: info.createdAt, source: info.source, width: info.width, height: info.height })
+    cacheImage(id, dataUrl)
+    importedImageIds.push(id)
+  }
+  for (const [id, info] of Object.entries(data.thumbnailFiles ?? {})) {
+    if (!referencedImageIds.has(id)) continue
+    const thumbnailDataUrl = readExportZipFileAsDataUrl(files, info.path)
+    if (!thumbnailDataUrl) continue
+    await putImageThumbnail({ id, thumbnailDataUrl, width: info.width, height: info.height, thumbnailVersion: info.thumbnailVersion })
+    cacheThumbnail(id, { dataUrl: thumbnailDataUrl, width: info.width, height: info.height, thumbnailVersion: info.thumbnailVersion })
+  }
+
+  // 文件夹随 ZIP 往返：保留模板原有的 templateCollectionId / Name；
+  // 对没有归属（导出时属于「未分组」）的模板，归入以 ZIP 文件名命名的新文件夹。
+  const fallbackCollectionId = genId()
+  const fallbackCollectionName = file.name.replace(/\.zip$/i, '').trim() || '导入的模板'
+  const importedTemplates: TaskRecord[] = templates.map((template) => {
+    const hasCollection = Boolean(template.templateCollectionId)
+    return {
+      ...template,
+      id: genId(),
+      kind: 'template' as const,
+      templateCollectionId: hasCollection ? template.templateCollectionId : fallbackCollectionId,
+      templateCollectionName: hasCollection
+        ? (template.templateCollectionName?.trim() || fallbackCollectionName)
+        : fallbackCollectionName,
+      // 导入的模板不继承原收藏夹归属，避免落入不存在的收藏夹
+      favoriteCollectionIds: undefined,
+      isFavorite: undefined,
+    }
+  })
+  for (const template of importedTemplates) {
+    await putTask(template)
+  }
+  return { count: importedTemplates.length, imageIds: importedImageIds }
+}
+
+/**
+ * 仅导入模板：支持一次选择多个 ZIP，每个 ZIP 各自归入一个独立文件夹。
+ */
+export async function importTemplates(input: File | File[]): Promise<boolean> {
+  const fileList = Array.isArray(input) ? input : [input]
+  if (!fileList.length) return false
+  try {
+    let totalCount = 0
+    let okZips = 0
+    const allImageIds: string[] = []
+    const failed: string[] = []
+    for (const file of fileList) {
+      try {
+        const { count, imageIds } = await importTemplatesFromFile(file)
+        if (count > 0) {
+          totalCount += count
+          okZips++
+          allImageIds.push(...imageIds)
+        } else {
+          failed.push(`${file.name}（无模板）`)
+        }
+      } catch (e) {
+        failed.push(`${file.name}（${e instanceof Error ? e.message : String(e)}）`)
+      }
+    }
+
+    if (totalCount > 0) {
+      const latestTasks = await getAllTasks()
+      useStore.getState().setTasks(latestTasks)
+      scheduleThumbnailBackfill(allImageIds)
+    }
+
+    if (totalCount > 0 && !failed.length) {
+      useStore.getState().showToast(
+        fileList.length > 1
+          ? `已从 ${okZips} 个文件夹导入 ${totalCount} 个模板`
+          : `已导入 ${totalCount} 个模板`,
+        'success',
+      )
+    } else if (totalCount > 0 && failed.length) {
+      useStore.getState().showToast(`已导入 ${totalCount} 个模板，部分失败：${failed.join('；')}`, 'info')
+    } else {
+      useStore.getState().showToast(`导入模板失败：${failed.join('；') || '未找到模板'}`, 'error')
+    }
+    return totalCount > 0
+  } catch (e) {
+    useStore.getState().showToast(`导入模板失败：${e instanceof Error ? e.message : String(e)}`, 'error')
+    return false
+  }
+}
+
+/** 清除全部模板及其专属图片（保留普通生图任务及其图片） */
+export async function clearTemplates(): Promise<void> {
+  try {
+    const allTasks = await getAllTasks()
+    const templates = allTasks.filter((t) => t.kind === 'template')
+    if (!templates.length) {
+      useStore.getState().showToast('没有可清除的模板', 'info')
+      return
+    }
+    const remainingTasks = allTasks.filter((t) => t.kind !== 'template')
+
+    for (const template of templates) {
+      await dbDeleteTask(template.id)
+    }
+
+    // 计算普通任务仍引用的图片，避免误删共享图片
+    const stillUsed = new Set<string>()
+    for (const t of remainingTasks) addTaskReferencedImageIds(stillUsed, t)
+    const templateImageIds = new Set<string>()
+    for (const t of templates) addTaskReferencedImageIds(templateImageIds, t)
+    for (const imgId of templateImageIds) {
+      if (stillUsed.has(imgId)) continue
+      await deleteImage(imgId)
+      imageCache.delete(imgId)
+      thumbnailCache.delete(imgId)
+      thumbnailBackfillIds.delete(imgId)
+    }
+
+    useStore.getState().setTasks(remainingTasks)
+    useStore.getState().clearTemplateSelection()
+    useStore.getState().showToast(`已清除 ${templates.length} 个模板`, 'success')
+  } catch (e) {
+    useStore.getState().showToast(`清除模板失败：${e instanceof Error ? e.message : String(e)}`, 'error')
   }
 }
 

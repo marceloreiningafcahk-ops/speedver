@@ -486,3 +486,6 @@ input[type="number"] {
   isolation: isolate;
   -webkit-mask-image: -webkit-radial-gradient(white, black);
 }
+
+/* ===== 电商图片工具箱主题覆盖 ===== */
+/* no-op fallback: preserve original app styling */

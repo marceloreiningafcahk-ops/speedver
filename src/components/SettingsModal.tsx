@@ -2,9 +2,11 @@ import { useEffect, useRef, useState, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { normalizeBaseUrl } from '../lib/api'
 import { isApiProxyAvailable, isApiProxyLocked, readClientDevProxyConfig } from '../lib/devProxy'
-import { useStore, exportData, importData, clearData, type SettingsTab } from '../store'
+import { useStore, exportData, importData, clearData, exportTemplates, importTemplates, clearTemplates, getTemplateCollections, isTaskCreatedInRange, type SettingsTab } from '../store'
 import {
   createDefaultOpenAIProfile,
+  DEFAULT_GEMINI_TIKAPI_BASE_URL,
+  DEFAULT_GEMINI_TIKAPI_MODEL,
   DEFAULT_FAL_BASE_URL,
   DEFAULT_FAL_MODEL,
   DEFAULT_IMAGES_MODEL,
@@ -34,9 +36,11 @@ import { DEFAULT_DROPDOWN_MAX_HEIGHT, getDropdownMaxHeight } from '../lib/dropdo
 import Select from './Select'
 import { Checkbox } from './Checkbox'
 import ViewportTooltip from './ViewportTooltip'
-import { ChevronDownIcon, CloseIcon, CopyIcon, PlusIcon, TrashIcon, GithubIcon, ExportIcon, ImportIcon, DragHandleIcon, LinkIcon } from './icons'
+import { ChevronDownIcon, CloseIcon, CopyIcon, PlusIcon, TrashIcon, GithubIcon, ExportIcon, ImportIcon, DragHandleIcon, LinkIcon, DownloadIcon } from './icons'
 import GeneralSettingsTab from './settings/GeneralSettingsTab'
-import AgentSettingsTab from './settings/AgentSettingsTab'
+import TemplateSettingsTab from './settings/TemplateSettingsTab'
+import { downloadImageEntries, downloadImageEntriesAsZip, getTaskOutputImageZipEntries } from '../lib/downloadImages'
+import DateRangePicker from './DateRangePicker'
 
 function newId(prefix: string) {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`
@@ -306,6 +310,8 @@ export default function SettingsModal() {
   const setConfirmDialog = useStore((s) => s.setConfirmDialog)
   const showToast = useStore((s) => s.showToast)
   const importInputRef = useRef<HTMLInputElement>(null)
+  const configImportInputRef = useRef<HTMLInputElement>(null)
+  const templateImportInputRef = useRef<HTMLInputElement>(null)
   const profileMenuRef = useRef<HTMLDivElement>(null)
   const profileMenuTriggerRef = useRef<HTMLButtonElement>(null)
 
@@ -319,7 +325,6 @@ export default function SettingsModal() {
   const [draft, setDraft] = useState<AppSettings>(normalizeSettings(settings))
   const [timeoutInput, setTimeoutInput] = useState(String(getActiveApiProfile(settings).timeout))
   const [agentMaxToolRoundsInput, setAgentMaxToolRoundsInput] = useState(String(settings.agentMaxToolRounds))
-  const [showApiKey, setShowApiKey] = useState(false)
   const [showProfileMenu, setShowProfileMenu] = useState(false)
   const [profileMenuMaxHeight, setProfileMenuMaxHeight] = useState(DEFAULT_DROPDOWN_MAX_HEIGHT)
   const [showCustomProviderImport, setShowCustomProviderImport] = useState(false)
@@ -331,13 +336,15 @@ export default function SettingsModal() {
   const [duplicateProfileTooltipVisible, setDuplicateProfileTooltipVisible] = useState(false)
   const [llmPromptTooltipVisible, setLlmPromptTooltipVisible] = useState(false)
   const [activeTab, setActiveTab] = useState<SettingsTab>('api')
-  const [exportConfig, setExportConfig] = useState(true)
-  const [exportTasks, setExportTasks] = useState(true)
-  const [importConfig, setImportConfig] = useState(true)
-  const [importTasks, setImportTasks] = useState(true)
-  const [clearConfig, setClearConfig] = useState(true)
-  const [clearTasks, setClearTasks] = useState(true)
   const [isImportingData, setIsImportingData] = useState(false)
+  const [isImportingConfig, setIsImportingConfig] = useState(false)
+  const [isImportingTemplates, setIsImportingTemplates] = useState(false)
+  // 模板导出范围（多选）：'__ungrouped__' = 未分组，其余为分组 id；空数组表示尚未选择（默认全选）
+  const [templateExportGroups, setTemplateExportGroups] = useState<string[]>([])
+  // 按日期下载：所选起止日期(YYYY-MM-DD)与下载中状态
+  const [downloadDateStart, setDownloadDateStart] = useState('')
+  const [downloadDateEnd, setDownloadDateEnd] = useState('')
+  const [isDownloadingByDate, setIsDownloadingByDate] = useState(false)
   const [isImportingJson, setIsImportingJson] = useState(false)
   const [draggedProfileId, setDraggedProfileId] = useState<string | null>(null)
   const [dragOverProfileId, setDragOverProfileId] = useState<string | null>(null)
@@ -362,18 +369,19 @@ export default function SettingsModal() {
   const defaultConfigOnly = isDefaultConfigOnlyEnabled()
   const activeProfile = draft.profiles.find((profile) => profile.id === draft.activeProfileId) ?? draft.profiles[0] ?? getActiveApiProfile(draft)
   const activeProviderIsOpenAICompatible = isOpenAICompatibleProvider(draft, activeProfile.provider)
-  const activeProviderUsesApiUrl = activeProviderIsOpenAICompatible || activeProfile.provider === 'fal'
+  const activeProviderUsesApiUrl = activeProviderIsOpenAICompatible || activeProfile.provider === 'fal' || activeProfile.provider === 'gemini-tikapi'
   const activeCustomProvider = draft.customProviders.find((provider) => provider.id === activeProfile.provider)
   const activeProfileApiProxyEligible = isProfileApiProxyEligible(draft, activeProfile)
   const activeCustomProviderAsync = isAsyncCustomProvider(activeCustomProvider)
   const apiProxyChecked = activeProfileApiProxyEligible && (apiProxyLocked || activeProfile.apiProxy)
   const apiProxyEnabled = apiProxyAvailable && activeProfileApiProxyEligible && apiProxyChecked
-  const defaultProviderOrder = ['openai', 'fal', ...draft.customProviders.map(p => p.id)]
+  const defaultProviderOrder = ['openai', 'fal', 'gemini-tikapi', ...draft.customProviders.map(p => p.id)]
   const providerOrder = draft.providerOrder || defaultProviderOrder
 
   const unorderedProviderOptions = [
     { label: 'OpenAI 兼容接口', value: 'openai', draggable: true },
     { label: 'fal.ai', value: 'fal', draggable: true },
+    { label: 'Gemini 3 Pro (TikAPI)', value: 'gemini-tikapi', draggable: true },
     ...draft.customProviders.map((provider) => ({
       label: provider.name,
       value: provider.id,
@@ -753,7 +761,7 @@ export default function SettingsModal() {
     if (file) {
       setIsImportingData(true)
       try {
-        const imported = await importData(file, { importConfig, importTasks })
+        const imported = await importData(file, { importConfig: false, importTasks: true })
         if (imported) {
           const nextDraft = normalizeSettings(useStore.getState().settings)
           setDraft(nextDraft)
@@ -767,12 +775,79 @@ export default function SettingsModal() {
     e.target.value = ''
   }
 
+  const handleImportConfig = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (file) {
+      setIsImportingConfig(true)
+      try {
+        const imported = await importData(file, { importConfig: true, importTasks: false })
+        if (imported) {
+          const nextDraft = normalizeSettings(useStore.getState().settings)
+          setDraft(nextDraft)
+          setTimeoutInput(String(getActiveApiProfile(nextDraft).timeout))
+          setShowProfileMenu(false)
+        }
+      } finally {
+        setIsImportingConfig(false)
+      }
+    }
+    e.target.value = ''
+  }
+
+  const handleImportTemplates = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files ? Array.from(e.target.files) : []
+    if (files.length) {
+      setIsImportingTemplates(true)
+      try {
+        await importTemplates(files)
+      } finally {
+        setIsImportingTemplates(false)
+      }
+    }
+    e.target.value = ''
+  }
+
   const handleClearAllData = async () => {
-    await clearData({ clearConfig, clearTasks })
+    await clearData({ clearConfig: false, clearTasks: true })
     const nextDraft = normalizeSettings(useStore.getState().settings)
     setDraft(nextDraft)
     setTimeoutInput(String(getActiveApiProfile(nextDraft).timeout))
     setShowProfileMenu(false)
+  }
+
+  // 下载指定日期区间生成的所有图片
+  const handleDownloadByDate = async () => {
+    if ((!downloadDateStart && !downloadDateEnd) || isDownloadingByDate) return
+    const matched = useStore.getState().tasks.filter(
+      (task) => task.kind !== 'template' && (task.outputImages?.length ?? 0) > 0 && isTaskCreatedInRange(task, downloadDateStart, downloadDateEnd),
+    )
+    const entries = getTaskOutputImageZipEntries(matched)
+    const rangeLabel = downloadDateStart && downloadDateEnd && downloadDateStart !== downloadDateEnd
+      ? `${downloadDateStart}~${downloadDateEnd}`
+      : (downloadDateStart || downloadDateEnd)
+    if (entries.length === 0) {
+      showToast(`${rangeLabel} 没有生成的图片`, 'info')
+      return
+    }
+    setIsDownloadingByDate(true)
+    try {
+      const zipName = `gpt-image-playground-${rangeLabel}`
+      const result = draft.zipDownloadRoutes.includes('task-selection')
+        ? await downloadImageEntriesAsZip(entries, zipName)
+        : await downloadImageEntries(entries)
+      if (result.successCount === 0) {
+        showToast('下载失败', 'error')
+      } else if (result.failCount > 0) {
+        showToast(`部分下载失败：成功 ${result.successCount}，失败 ${result.failCount}`, 'error')
+      } else {
+        showToast(`下载成功：${result.successCount} 张图片`, 'success')
+      }
+    } catch (err) {
+      console.error(err)
+      showToast('下载失败', 'error')
+    } finally {
+      setIsDownloadingByDate(false)
+    }
   }
 
   const createNewProfile = () => {
@@ -1172,7 +1247,6 @@ export default function SettingsModal() {
             设置
           </h3>
           <div className="flex items-center gap-3">
-            <span className="text-sm text-gray-400 dark:text-gray-500 font-mono select-none">v{__APP_VERSION__}</span>
             <button
               onClick={handleClose}
               className="rounded-full p-1 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-white/[0.06] dark:hover:text-gray-200"
@@ -1206,15 +1280,13 @@ export default function SettingsModal() {
                 习惯配置
               </button>
               <button
-                onClick={() => setActiveTab('agent')}
-                className={`whitespace-nowrap flex-shrink-0 flex items-center gap-2.5 px-3 py-2.5 text-sm rounded-xl transition-colors ${activeTab === 'agent' ? 'bg-white dark:bg-white/[0.08] shadow-sm text-blue-600 dark:text-blue-400 font-medium' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100/80 dark:hover:bg-white/[0.04]'}`}
+                onClick={() => setActiveTab('template')}
+                className={`whitespace-nowrap flex-shrink-0 flex items-center gap-2.5 px-3 py-2.5 text-sm rounded-xl transition-colors ${activeTab === 'template' ? 'bg-white dark:bg-white/[0.08] shadow-sm text-blue-600 dark:text-blue-400 font-medium' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100/80 dark:hover:bg-white/[0.04]'}`}
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8V4H8" />
-                  <rect width="16" height="12" x="4" y="8" rx="2" strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} />
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2 14h2M20 14h2M15 13v2M9 13v2" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zM16 13a1 1 0 011-1h2a1 1 0 011 1v6a1 1 0 01-1 1h-2a1 1 0 01-1-1v-6z" />
                 </svg>
-                Agent 配置
+                模板模式管理
               </button>
               <button
                 onClick={() => setActiveTab('data')}
@@ -1223,7 +1295,7 @@ export default function SettingsModal() {
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4" />
                 </svg>
-                数据管理
+                生图模式管理
               </button>
               <button
                 onClick={() => setActiveTab('about')}
@@ -1250,20 +1322,55 @@ export default function SettingsModal() {
               />
             )}
 
-            {activeTab === 'agent' && (
-              <AgentSettingsTab
-                draft={draft}
-                agentMaxToolRoundsInput={agentMaxToolRoundsInput}
-                agentTextProfileOptions={agentTextProfileOptions}
-                agentImageProfileOptions={agentImageProfileOptions}
-                selectedAgentTextProfile={selectedAgentTextProfile}
-                selectedAgentImageProfile={selectedAgentImageProfile}
-                setAgentMaxToolRoundsInput={setAgentMaxToolRoundsInput}
-                updateAgentApiConfigMode={updateAgentApiConfigMode}
-                commitSettings={commitSettings}
-                commitAgentMaxToolRounds={commitAgentMaxToolRounds}
-              />
-            )}
+            {activeTab === 'template' && (() => {
+              // 构建导出范围多选项：未分组（若有）/ 各分组
+              const collections = getTemplateCollections()
+              const ungroupedCount = useStore.getState().tasks.filter((t) => t.kind === 'template' && !t.templateCollectionId).length
+              const exportGroupOptions = [
+                ...(ungroupedCount > 0 ? [{ label: `未分组（${ungroupedCount}）`, value: '__ungrouped__' }] : []),
+                ...collections.map((c) => ({ label: `${c.name}（${c.count}）`, value: c.id })),
+              ]
+              // 仅保留仍存在的选中项（分组可能被删除/清空）
+              const validValues = new Set(exportGroupOptions.map((o) => o.value))
+              const selectedGroups = templateExportGroups.filter((v) => validValues.has(v))
+              const toggleGroup = (value: string) => {
+                setTemplateExportGroups((prev) => prev.includes(value) ? prev.filter((v) => v !== value) : [...prev, value])
+              }
+              const runExport = () => {
+                // 未选择任何分组 => 导出全部
+                if (selectedGroups.length === 0) return exportTemplates()
+                const ids = selectedGroups.map((v) => v === '__ungrouped__' ? null : v)
+                return exportTemplates(ids)
+              }
+              return (
+              <>
+                <TemplateSettingsTab
+                  draft={draft}
+                  templateProfileOptions={agentImageProfileOptions}
+                  commitSettings={commitSettings}
+                  exportGroupOptions={exportGroupOptions}
+                  selectedExportGroups={selectedGroups}
+                  onToggleExportGroup={toggleGroup}
+                  onExportTemplates={runExport}
+                  onImportTemplates={() => templateImportInputRef.current?.click()}
+                  onClearTemplates={() => setConfirmDialog({
+                    title: '清除全部模板',
+                    message: '确定要删除所有模板及其专属图片吗？此操作不可恢复。',
+                    action: () => clearTemplates(),
+                  })}
+                  isImportingTemplates={isImportingTemplates}
+                />
+                <input
+                  ref={templateImportInputRef}
+                  type="file"
+                  accept=".zip"
+                  multiple
+                  className="hidden"
+                  onChange={handleImportTemplates}
+                />
+              </>
+              )
+            })()}
             
             {activeTab === 'api' && (
               <div className="space-y-4">
@@ -1487,7 +1594,11 @@ export default function SettingsModal() {
                     onBlur={(e) => commitActiveProfilePatch({ baseUrl: e.target.value })}
                     type="text"
                     disabled={apiProxyEnabled}
-                    placeholder={activeProfile.provider === 'fal' ? DEFAULT_FAL_BASE_URL : DEFAULT_SETTINGS.baseUrl}
+                    placeholder={activeProfile.provider === 'fal'
+                      ? DEFAULT_FAL_BASE_URL
+                      : activeProfile.provider === 'gemini-tikapi'
+                      ? DEFAULT_GEMINI_TIKAPI_BASE_URL
+                      : DEFAULT_SETTINGS.baseUrl}
                     className={`w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50 ${apiProxyEnabled ? 'opacity-50 cursor-not-allowed' : ''}`}
                   />
                   <div data-selectable-text className="mt-1.5 min-h-[22px] flex items-center text-xs text-gray-500 dark:text-gray-500">
@@ -1495,6 +1606,8 @@ export default function SettingsModal() {
                       <span className="text-yellow-600 dark:text-yellow-500">已开启代理，实际请求目标由部署端决定，此处设置被忽略。</span>
                     ) : activeProfile.provider === 'fal' ? (
                       <span>默认使用 <code className="bg-gray-100 dark:bg-white/[0.06] px-1 py-0.5 rounded">{DEFAULT_FAL_BASE_URL}</code>；填写自定义地址时将作为 fal.ai 代理 URL。</span>
+                    ) : activeProfile.provider === 'gemini-tikapi' ? (
+                      <span>默认使用 <code className="bg-gray-100 dark:bg-white/[0.06] px-1 py-0.5 rounded">{DEFAULT_GEMINI_TIKAPI_BASE_URL}</code>；请求会发送到 TikAPI Gemini generateContent 接口。</span>
                     ) : (
                       <span>支持通过查询参数覆盖：<code className="bg-gray-100 dark:bg-white/[0.06] px-1 py-0.5 rounded">?apiUrl=</code></span>
                     )}
@@ -1527,7 +1640,7 @@ export default function SettingsModal() {
                 </div>
               )}
 
-              {/* 5. API Key */}
+              {/* 5. API Key（仅可填写，不显示明文、不可复制） */}
               <div className="block">
                 <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">API Key</span>
                 <div className="relative">
@@ -1535,33 +1648,20 @@ export default function SettingsModal() {
                     value={activeProfile.apiKey}
                     onChange={(e) => updateActiveProfile({ apiKey: e.target.value })}
                     onBlur={(e) => commitActiveProfilePatch({ apiKey: e.target.value })}
-                    type={showApiKey ? 'text' : 'password'}
-                    placeholder={activeProfile.provider === 'fal' ? 'FAL_KEY' : 'sk-...'}
-                    className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 pr-10 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
+                    onCopy={(e) => e.preventDefault()}
+                    onCut={(e) => e.preventDefault()}
+                    type="password"
+                    autoComplete="off"
+                    placeholder={activeProfile.provider === 'fal' ? 'FAL_KEY' : activeProfile.provider === 'gemini-tikapi' ? 'TikAPI Key' : 'sk-...'}
+                    className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
                   />
-                  <button
-                    type="button"
-                    onClick={() => setShowApiKey((v) => !v)}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-gray-400 hover:text-gray-600 transition-colors"
-                    tabIndex={-1}
-                  >
-                    {showApiKey ? (
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
-                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-                        <circle cx="12" cy="12" r="3" />
-                      </svg>
-                    ) : (
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
-                        <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" />
-                        <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" />
-                        <path d="M14.12 14.12a3 3 0 1 1-4.24-4.24" />
-                        <line x1="1" y1="1" x2="23" y2="23" />
-                      </svg>
-                    )}
-                  </button>
                 </div>
                 <div data-selectable-text className="mt-1.5 text-xs text-gray-500 dark:text-gray-500">
-                  支持通过查询参数覆盖：<code className="bg-gray-100 dark:bg-white/[0.06] px-1 py-0.5 rounded">?apiKey=</code>
+                  {activeProfile.provider === 'gemini-tikapi' ? (
+                    <>填写 TikAPI 后台的裸 Key，例如 <code className="bg-gray-100 dark:bg-white/[0.06] px-1 py-0.5 rounded">sk-...</code>，不要加 <code className="bg-gray-100 dark:bg-white/[0.06] px-1 py-0.5 rounded">Bearer</code>。</>
+                  ) : (
+                    <>支持通过查询参数覆盖：<code className="bg-gray-100 dark:bg-white/[0.06] px-1 py-0.5 rounded">?apiKey=</code></>
+                  )}
                 </div>
               </div>
 
@@ -1601,12 +1701,18 @@ export default function SettingsModal() {
                   onChange={(e) => updateActiveProfile({ model: e.target.value })}
                   onBlur={(e) => commitActiveProfilePatch({ model: e.target.value })}
                   type="text"
-                  placeholder={activeProfile.provider === 'fal' ? DEFAULT_FAL_MODEL : getDefaultModelForMode(activeProfile.apiMode ?? DEFAULT_SETTINGS.apiMode)}
+                  placeholder={activeProfile.provider === 'fal'
+                    ? DEFAULT_FAL_MODEL
+                    : activeProfile.provider === 'gemini-tikapi'
+                    ? DEFAULT_GEMINI_TIKAPI_MODEL
+                    : getDefaultModelForMode(activeProfile.apiMode ?? DEFAULT_SETTINGS.apiMode)}
                   className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
                 />
                 <div data-selectable-text className="mt-1.5 text-xs text-gray-500 dark:text-gray-500">
                   {activeProfile.provider === 'fal' ? (
                     <>当前适配 <code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">{DEFAULT_FAL_MODEL}</code>。</>
+                  ) : activeProfile.provider === 'gemini-tikapi' ? (
+                    <>当前适配 <code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">{DEFAULT_GEMINI_TIKAPI_MODEL}</code>，使用原上传按钮添加的参考图会按 TikAPI <code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">inline_data</code> 格式发送。</>
                   ) : activeCustomProvider ? (
                     <>当前使用 <code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">{activeCustomProvider.name}</code>。</>
                   ) : (activeProfile.apiMode ?? DEFAULT_SETTINGS.apiMode) === 'responses' ? (
@@ -1725,6 +1831,49 @@ export default function SettingsModal() {
                   />
                 </label>
               )}
+
+              {/* 12. 配置导入导出（仅 API 配置，不含生图任务） */}
+              <div className="pt-2 border-t border-gray-100 dark:border-white/[0.08] space-y-3">
+                <div data-selectable-text className="text-xs leading-relaxed text-gray-500 dark:text-gray-400">
+                  导入导出全部 API 配置与应用设置（不含生图任务和图片，后者在「生图模式管理」中处理）。
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    onClick={() => exportData({ exportConfig: true, exportTasks: false })}
+                    className="flex flex-1 min-w-[8rem] items-center justify-center gap-2 rounded-xl bg-gray-100/80 px-4 py-2.5 text-sm font-medium text-gray-700 transition-all hover:bg-gray-200 hover:text-gray-900 dark:bg-white/[0.06] dark:text-gray-300 dark:hover:bg-white/[0.1] dark:hover:text-white"
+                  >
+                    <ExportIcon className="w-4 h-4" />
+                    导出配置
+                  </button>
+                  <button
+                    onClick={() => configImportInputRef.current?.click()}
+                    disabled={isImportingConfig}
+                    className="flex flex-1 min-w-[8rem] items-center justify-center gap-2 rounded-xl bg-gray-100/80 px-4 py-2.5 text-sm font-medium text-gray-700 transition-all hover:bg-gray-200 hover:text-gray-900 disabled:opacity-50 disabled:hover:bg-gray-100/80 disabled:hover:text-gray-700 dark:bg-white/[0.06] dark:text-gray-300 dark:hover:bg-white/[0.1] dark:hover:text-white dark:disabled:hover:bg-white/[0.06] dark:disabled:hover:text-gray-300"
+                  >
+                    {isImportingConfig ? (
+                      <>
+                        <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        导入中...
+                      </>
+                    ) : (
+                      <>
+                        <ImportIcon className="w-4 h-4" />
+                        从 ZIP 导入配置
+                      </>
+                    )}
+                  </button>
+                  <input
+                    ref={configImportInputRef}
+                    type="file"
+                    accept=".zip"
+                    className="hidden"
+                    onChange={handleImportConfig}
+                  />
+                </div>
+              </div>
             </div>
             )}
             
@@ -1735,56 +1884,67 @@ export default function SettingsModal() {
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
                   </svg>
                   <div className="text-[13px] leading-relaxed text-gray-500 dark:text-gray-400">
-                    所有的配置、任务和生成的图片均仅保存在您的浏览器本地（除非您使用的服务商存储了它们）。如果您需要清理浏览器站点数据、重置浏览器或使用其他设备，请先导出备份。
+                    此处仅管理「生图模式」的普通任务与图片，不含 API 配置（请在「API 配置」中导入导出）与模板（请在「模板模式管理」管理）。所有数据均仅保存在您的浏览器本地（除非您使用的服务商存储了它们）。如需清理浏览器站点数据、重置浏览器或换设备，请先导出备份。
                   </div>
                 </div>
 
                 <div className="rounded-2xl border border-gray-100 bg-white p-4 dark:border-white/[0.06] dark:bg-white/[0.02] space-y-4 shadow-sm">
                   <div className="flex items-center gap-2 mb-1">
                     <ExportIcon className="w-4 h-4 text-gray-700 dark:text-gray-300" />
-                    <h4 className="text-sm font-bold text-gray-800 dark:text-gray-100">导出数据</h4>
-                  </div>
-                  <div className="flex flex-wrap gap-x-6 gap-y-3">
-                    <Checkbox
-                      checked={exportConfig}
-                      onChange={setExportConfig}
-                      label="包含配置"
-                    />
-                    <Checkbox
-                      checked={exportTasks}
-                      onChange={setExportTasks}
-                      label="包含任务和图片"
-                    />
+                    <h4 className="text-sm font-bold text-gray-800 dark:text-gray-100">导出生图数据</h4>
                   </div>
                   <button
-                    onClick={() => exportData({ exportConfig, exportTasks })}
-                    disabled={!exportConfig && !exportTasks}
-                    className="w-full rounded-xl bg-gray-100/80 px-4 py-2.5 text-sm font-medium text-gray-700 transition-all hover:bg-gray-200 hover:text-gray-900 disabled:opacity-50 disabled:hover:bg-gray-100/80 disabled:hover:text-gray-700 dark:bg-white/[0.06] dark:text-gray-300 dark:hover:bg-white/[0.1] dark:hover:text-white dark:disabled:hover:bg-white/[0.06] dark:disabled:hover:text-gray-300 flex items-center justify-center gap-2"
+                    onClick={() => exportData({ exportConfig: false, exportTasks: true })}
+                    className="w-full rounded-xl bg-gray-100/80 px-4 py-2.5 text-sm font-medium text-gray-700 transition-all hover:bg-gray-200 hover:text-gray-900 dark:bg-white/[0.06] dark:text-gray-300 dark:hover:bg-white/[0.1] dark:hover:text-white flex items-center justify-center gap-2"
                   >
-                    导出所选数据
+                    导出生图任务和图片
                   </button>
+                </div>
+
+                <div className="rounded-2xl border border-gray-100 bg-white p-4 dark:border-white/[0.06] dark:bg-white/[0.02] space-y-3 shadow-sm">
+                  <div className="flex items-center gap-2 mb-1">
+                    <DownloadIcon className="w-4 h-4 text-gray-700 dark:text-gray-300" />
+                    <h4 className="text-sm font-bold text-gray-800 dark:text-gray-100">按日期下载图片</h4>
+                  </div>
+                  <div data-selectable-text className="text-xs leading-relaxed text-gray-500 dark:text-gray-500">
+                    选择一段日期区间，下载该区间内生成的所有图片（按生成时间命名，精确到秒）。
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <DateRangePicker
+                      start={downloadDateStart}
+                      end={downloadDateEnd}
+                      onChange={(s, e) => { setDownloadDateStart(s); setDownloadDateEnd(e) }}
+                      placeholder="选择日期区间"
+                      className="h-[42px] flex-1 rounded-xl border border-gray-200 dark:border-white/[0.08] bg-white dark:bg-gray-900 px-3 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-white/[0.06] transition"
+                    />
+                    <button
+                      onClick={handleDownloadByDate}
+                      disabled={(!downloadDateStart && !downloadDateEnd) || isDownloadingByDate}
+                      className="h-[42px] shrink-0 rounded-xl bg-gray-100/80 px-4 text-sm font-medium text-gray-700 transition-all hover:bg-gray-200 hover:text-gray-900 disabled:opacity-50 disabled:hover:bg-gray-100/80 disabled:hover:text-gray-700 dark:bg-white/[0.06] dark:text-gray-300 dark:hover:bg-white/[0.1] dark:hover:text-white dark:disabled:hover:bg-white/[0.06] dark:disabled:hover:text-gray-300 flex items-center justify-center gap-2"
+                    >
+                      {isDownloadingByDate ? (
+                        <>
+                          <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                          </svg>
+                          下载中...
+                        </>
+                      ) : (
+                        '下载'
+                      )}
+                    </button>
+                  </div>
                 </div>
 
                 <div className="rounded-2xl border border-gray-100 bg-white p-4 dark:border-white/[0.06] dark:bg-white/[0.02] space-y-4 shadow-sm">
                   <div className="flex items-center gap-2 mb-1">
                     <ImportIcon className="w-4 h-4 text-gray-700 dark:text-gray-300" />
-                    <h4 className="text-sm font-bold text-gray-800 dark:text-gray-100">导入数据</h4>
-                  </div>
-                  <div className="flex flex-wrap gap-x-6 gap-y-3">
-                    <Checkbox
-                      checked={importConfig}
-                      onChange={setImportConfig}
-                      label="包含配置"
-                    />
-                    <Checkbox
-                      checked={importTasks}
-                      onChange={setImportTasks}
-                      label="包含任务和图片"
-                    />
+                    <h4 className="text-sm font-bold text-gray-800 dark:text-gray-100">导入生图数据</h4>
                   </div>
                   <button
                     onClick={() => importInputRef.current?.click()}
-                    disabled={(!importConfig && !importTasks) || isImportingData}
+                    disabled={isImportingData}
                     className="w-full rounded-xl bg-gray-100/80 px-4 py-2.5 text-sm font-medium text-gray-700 transition-all hover:bg-gray-200 hover:text-gray-900 disabled:opacity-50 disabled:hover:bg-gray-100/80 disabled:hover:text-gray-700 dark:bg-white/[0.06] dark:text-gray-300 dark:hover:bg-white/[0.1] dark:hover:text-white dark:disabled:hover:bg-white/[0.06] dark:disabled:hover:text-gray-300 flex items-center justify-center gap-2"
                   >
                     {isImportingData ? (
@@ -1796,7 +1956,7 @@ export default function SettingsModal() {
                         导入中...
                       </>
                     ) : (
-                      '从 ZIP 导入所选数据'
+                      '从 ZIP 导入生图任务和图片'
                     )}
                   </button>
                   <input
@@ -1811,34 +1971,19 @@ export default function SettingsModal() {
                 <div className="rounded-2xl border border-red-100/50 bg-red-50/30 p-4 dark:border-red-500/10 dark:bg-red-500/5 space-y-4 shadow-sm">
                   <div className="flex items-center gap-2 mb-1">
                     <TrashIcon className="w-4 h-4 text-red-500/90 dark:text-red-400" />
-                    <h4 className="text-sm font-bold text-red-500/90 dark:text-red-400">清除数据</h4>
-                  </div>
-                  <div className="flex flex-wrap gap-x-6 gap-y-3">
-                    <Checkbox
-                      checked={clearConfig}
-                      onChange={setClearConfig}
-                      label="包含配置"
-                      tone="danger"
-                    />
-                    <Checkbox
-                      checked={clearTasks}
-                      onChange={setClearTasks}
-                      label="包含任务和图片"
-                      tone="danger"
-                    />
+                    <h4 className="text-sm font-bold text-red-500/90 dark:text-red-400">清除生图数据</h4>
                   </div>
                   <button
                     onClick={() =>
                       setConfirmDialog({
-                        title: '清空所选数据',
-                        message: `确定要清空所选的数据吗？此操作不可恢复。`,
+                        title: '清空生图数据',
+                        message: `确定要清空所有生图任务和图片吗？此操作不可恢复。`,
                         action: () => handleClearAllData(),
                       })
                     }
-                    disabled={!clearConfig && !clearTasks}
-                    className="w-full rounded-xl border border-red-200/60 bg-red-50/50 px-4 py-2.5 text-sm font-medium text-red-500 transition-all hover:bg-red-50 hover:border-red-200 hover:text-red-600 disabled:opacity-50 disabled:hover:bg-red-50/50 disabled:hover:border-red-200/60 disabled:hover:text-red-500 dark:border-red-500/15 dark:bg-red-500/5 dark:text-red-400 dark:hover:bg-red-500/10 dark:hover:border-red-500/30 dark:hover:text-red-300 dark:disabled:hover:bg-red-500/5 dark:disabled:hover:border-red-500/15 dark:disabled:hover:text-red-400"
+                    className="w-full rounded-xl border border-red-200/60 bg-red-50/50 px-4 py-2.5 text-sm font-medium text-red-500 transition-all hover:bg-red-50 hover:border-red-200 hover:text-red-600 dark:border-red-500/15 dark:bg-red-500/5 dark:text-red-400 dark:hover:bg-red-500/10 dark:hover:border-red-500/30 dark:hover:text-red-300"
                   >
-                    清空所选数据
+                    清空生图任务和图片
                   </button>
                 </div>
               </div>
@@ -1883,13 +2028,35 @@ export default function SettingsModal() {
                   <div className="mb-5 flex h-[88px] w-[88px] items-center justify-center rounded-full border border-gray-200/80 bg-gray-50/50 text-gray-800 transition-colors group-hover:bg-gray-100 dark:border-white/[0.08] dark:bg-white/[0.02] dark:text-gray-100 dark:group-hover:bg-white/[0.06]">
                     <GithubIcon className="h-11 w-11" />
                   </div>
-                  <h4 className="text-[17px] font-bold text-gray-800 dark:text-gray-100">GPT Image Playground</h4>
+                  <h4 className="text-[17px] font-bold text-gray-800 dark:text-gray-100">image playground</h4>
                   <p className="mt-1.5 text-[13px] text-gray-500 transition-colors group-hover:text-gray-700 dark:text-gray-400 dark:group-hover:text-gray-300">
                     @CookSleep
                   </p>
                 </a>
                 
-                <p className="mt-8 mb-6 max-w-[360px] text-center text-[13px] leading-relaxed text-gray-500 dark:text-gray-400">
+                <p className="mt-8 mb-3 max-w-[360px] text-center text-[13px] leading-relaxed text-gray-500 dark:text-gray-400">
+                  本站点基于开源项目{' '}
+                  <a
+                    href="https://github.com/CookSleep/gpt_image_playground"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="font-medium text-gray-700 underline decoration-gray-300 underline-offset-2 transition-colors hover:text-gray-900 dark:text-gray-300 dark:decoration-white/20 dark:hover:text-white"
+                  >
+                    GPT Image Playground
+                  </a>{' '}
+                  （
+                  <a
+                    href="https://github.com/CookSleep/gpt_image_playground/blob/main/LICENSE"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="font-medium text-gray-700 underline decoration-gray-300 underline-offset-2 transition-colors hover:text-gray-900 dark:text-gray-300 dark:decoration-white/20 dark:hover:text-white"
+                  >
+                    MIT
+                  </a>
+                  ）修改。
+                </p>
+
+                <p className="mb-6 max-w-[360px] text-center text-[13px] leading-relaxed text-gray-500 dark:text-gray-400">
                   本项目的成长离不开每一位用户的使用、反馈、贡献与支持，感谢一路有你。
                 </p>
 

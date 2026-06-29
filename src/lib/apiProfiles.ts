@@ -31,10 +31,12 @@ export const DEFAULT_IMAGES_MODEL = 'gpt-image-2'
 export const DEFAULT_RESPONSES_MODEL = 'gpt-5.5'
 export const DEFAULT_FAL_BASE_URL = 'https://fal.run'
 export const DEFAULT_FAL_MODEL = 'openai/gpt-image-2'
+export const DEFAULT_GEMINI_TIKAPI_BASE_URL = 'https://store.forcepic.com'
+export const DEFAULT_GEMINI_TIKAPI_MODEL = 'gemini-3-pro-image-preview'
 export const DEFAULT_OPENAI_PROFILE_ID = 'default-openai'
 export const DEFAULT_API_TIMEOUT = 600
 
-const BUILT_IN_PROVIDER_IDS = new Set<ApiProvider>(['openai', 'fal'])
+const BUILT_IN_PROVIDER_IDS = new Set<ApiProvider>(['openai', 'fal', 'gemini-tikapi'])
 const DEFAULT_CUSTOM_PROVIDER_PATHS = {
   generationPath: 'images/generations',
   editPath: 'images/edits',
@@ -97,7 +99,7 @@ function normalizeZipDownloadRoutes(value: unknown) {
 function normalizeProviderOrder(value: unknown, customProviders: CustomProviderDefinition[]): string[] | undefined {
   if (!Array.isArray(value)) return undefined
 
-  const providerIds = ['openai', 'fal', ...customProviders.map((provider) => provider.id)]
+  const providerIds = ['openai', 'fal', 'gemini-tikapi', ...customProviders.map((provider) => provider.id)]
   const knownIds = new Set(providerIds)
   const ordered = value
     .map(String)
@@ -357,6 +359,24 @@ export function createDefaultFalProfile(overrides: Partial<ApiProfile> = {}): Ap
   }
 }
 
+export function createDefaultGeminiTikApiProfile(overrides: Partial<ApiProfile> = {}): ApiProfile {
+  return {
+    id: `gemini-tikapi-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+    name: 'Gemini 3 Pro',
+    provider: 'gemini-tikapi',
+    baseUrl: DEFAULT_GEMINI_TIKAPI_BASE_URL,
+    apiKey: '',
+    model: DEFAULT_GEMINI_TIKAPI_MODEL,
+    timeout: DEFAULT_API_TIMEOUT,
+    apiMode: 'images',
+    codexCli: false,
+    apiProxy: false,
+    streamImages: false,
+    streamPartialImages: DEFAULT_STREAM_PARTIAL_IMAGES,
+    ...overrides,
+  }
+}
+
 export function switchApiProfileProvider(profile: ApiProfile, provider: ApiProvider, customProvider?: CustomProviderDefinition): ApiProfile {
   const providerDrafts = {
     ...profile.providerDrafts,
@@ -383,6 +403,22 @@ export function switchApiProfileProvider(profile: ApiProfile, provider: ApiProvi
       codexCli: false,
       apiProxy: false,
       responseFormatB64Json: savedDraft?.responseFormatB64Json,
+      streamImages: false,
+      streamPartialImages: savedDraft?.streamPartialImages ?? DEFAULT_STREAM_PARTIAL_IMAGES,
+      providerDrafts,
+    }
+  }
+
+  if (provider === 'gemini-tikapi') {
+    return {
+      ...profile,
+      provider,
+      baseUrl: savedDraft?.baseUrl ?? DEFAULT_GEMINI_TIKAPI_BASE_URL,
+      model: savedDraft?.model ?? DEFAULT_GEMINI_TIKAPI_MODEL,
+      apiMode: 'images',
+      codexCli: false,
+      apiProxy: false,
+      responseFormatB64Json: false,
       streamImages: false,
       streamPartialImages: savedDraft?.streamPartialImages ?? DEFAULT_STREAM_PARTIAL_IMAGES,
       providerDrafts,
@@ -431,16 +467,22 @@ export function switchApiProfileProvider(profile: ApiProfile, provider: ApiProvi
 
 function normalizeProviderDraft(input: unknown, provider: ApiProvider, customProviderIds: Set<string>): ApiProfileProviderDraft {
   if (!isRecord(input)) return undefined
-  const fallback = provider === 'fal' ? createDefaultFalProfile() : createDefaultOpenAIProfile()
+  const fallback = provider === 'fal'
+    ? createDefaultFalProfile()
+    : provider === 'gemini-tikapi'
+    ? createDefaultGeminiTikApiProfile()
+    : createDefaultOpenAIProfile()
   const baseUrl = typeof input.baseUrl === 'string' ? input.baseUrl : undefined
   const model = typeof input.model === 'string' && input.model.trim() ? input.model : undefined
   const apiMode = input.apiMode === 'responses' ? 'responses' : input.apiMode === 'images' ? 'images' : undefined
-  const knownProvider = provider === 'fal' || provider === 'openai' || customProviderIds.has(provider)
+  const knownProvider = provider === 'fal' || provider === 'openai' || provider === 'gemini-tikapi' || customProviderIds.has(provider)
   if (!knownProvider) return undefined
 
   return {
     baseUrl: provider === 'fal'
       ? baseUrl?.trim().replace(/\/+$/, '') || DEFAULT_FAL_BASE_URL
+      : provider === 'gemini-tikapi'
+      ? baseUrl?.trim().replace(/\/+$/, '') || DEFAULT_GEMINI_TIKAPI_BASE_URL
       : baseUrl,
     model,
     apiMode,
@@ -464,10 +506,12 @@ function normalizeProviderDrafts(input: unknown, customProviderIds: Set<string>)
 export function normalizeApiProfile(input: unknown, fallback?: Partial<ApiProfile>, customProviderIds = new Set<string>()): ApiProfile {
   const record = input && typeof input === 'object' ? input as Record<string, unknown> : {}
   const rawProvider = typeof record.provider === 'string' ? record.provider : ''
-  const provider: ApiProvider = rawProvider === 'fal' || customProviderIds.has(rawProvider) ? rawProvider : 'openai'
+  const provider: ApiProvider = rawProvider === 'fal' || rawProvider === 'gemini-tikapi' || customProviderIds.has(rawProvider) ? rawProvider : 'openai'
   const apiMode: ApiMode = provider === 'openai' && record.apiMode === 'responses' ? 'responses' : 'images'
   const defaults = provider === 'fal'
     ? createDefaultFalProfile(fallback)
+    : provider === 'gemini-tikapi'
+    ? createDefaultGeminiTikApiProfile(fallback)
     : createDefaultOpenAIProfile({ ...fallback, apiMode })
   const rawBaseUrl = typeof record.baseUrl === 'string' ? record.baseUrl : defaults.baseUrl
   const streamImages = provider === 'openai'
@@ -479,7 +523,11 @@ export function normalizeApiProfile(input: unknown, fallback?: Partial<ApiProfil
     id: typeof record.id === 'string' && record.id.trim() ? record.id : defaults.id,
     name: typeof record.name === 'string' && record.name.trim() ? record.name : defaults.name,
     provider,
-    baseUrl: provider === 'fal' ? rawBaseUrl.trim().replace(/\/+$/, '') || DEFAULT_FAL_BASE_URL : rawBaseUrl,
+    baseUrl: provider === 'fal'
+      ? rawBaseUrl.trim().replace(/\/+$/, '') || DEFAULT_FAL_BASE_URL
+      : provider === 'gemini-tikapi'
+      ? rawBaseUrl.trim().replace(/\/+$/, '') || DEFAULT_GEMINI_TIKAPI_BASE_URL
+      : rawBaseUrl,
     apiKey: typeof record.apiKey === 'string' ? record.apiKey : defaults.apiKey,
     model: typeof record.model === 'string' && record.model.trim() ? record.model : defaults.model,
     timeout: typeof record.timeout === 'number' && Number.isFinite(record.timeout) ? record.timeout : defaults.timeout,
@@ -538,6 +586,9 @@ export function normalizeSettings(input: Partial<AppSettings> | unknown): AppSet
   const agentImageProfileId = typeof record.agentImageProfileId === 'string' && profiles.some((p) => p.id === record.agentImageProfileId)
     ? record.agentImageProfileId
     : active.id
+  const templateApiProfileId = typeof record.templateApiProfileId === 'string' && profiles.some((p) => p.id === record.templateApiProfileId)
+    ? record.templateApiProfileId
+    : null
 
   return {
     baseUrl: active.baseUrl,
@@ -567,6 +618,7 @@ export function normalizeSettings(input: Partial<AppSettings> | unknown): AppSet
     agentApiConfigMode,
     agentTextProfileId,
     agentImageProfileId,
+    templateApiProfileId,
     profiles,
     activeProfileId,
   }
@@ -584,6 +636,12 @@ export function getAgentImageApiProfile(settings: Partial<AppSettings> | unknown
   return normalized.profiles.find((profile) => profile.id === normalized.agentImageProfileId) ?? null
 }
 
+/** 模板批量生图默认 API 配置：设置了则用它，否则回退到当前激活配置 */
+export function getTemplateApiProfile(settings: Partial<AppSettings> | unknown): ApiProfile {
+  const normalized = normalizeSettings(settings)
+  return normalized.profiles.find((profile) => profile.id === normalized.templateApiProfileId) ?? getActiveApiProfile(normalized)
+}
+
 export function getCustomProviderDefinition(settings: Partial<AppSettings> | unknown, provider: ApiProvider): CustomProviderDefinition | null {
   const normalized = normalizeSettings(settings)
   return normalized.customProviders.find((item) => item.id === provider) ?? null
@@ -591,6 +649,7 @@ export function getCustomProviderDefinition(settings: Partial<AppSettings> | unk
 
 export function getApiProviderLabel(settings: Partial<AppSettings> | unknown, provider: ApiProvider): string {
   if (provider === 'fal') return 'fal.ai'
+  if (provider === 'gemini-tikapi') return 'Gemini 3 Pro (TikAPI)'
   if (provider === 'openai') return 'OpenAI'
   return getCustomProviderDefinition(settings, provider)?.name ?? provider
 }

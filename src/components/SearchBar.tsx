@@ -2,6 +2,7 @@ import { useEffect, useRef, type ReactNode } from 'react'
 import { ALL_FAVORITES_COLLECTION_ID, clearFailedTasks, getTaskFavoriteCollectionIds, useStore, taskMatchesFilterStatus, taskMatchesSearchQuery } from '../store'
 import { useTooltip } from '../hooks/useTooltip'
 import Select from './Select'
+import DateRangePicker from './DateRangePicker'
 import { ChevronLeftIcon, CollectionManageIcon, FavoriteIcon, TrashIcon } from './icons'
 import ViewportTooltip from './ViewportTooltip'
 
@@ -49,6 +50,11 @@ export default function SearchBar() {
   const setSearchQuery = useStore((s) => s.setSearchQuery)
   const filterStatus = useStore((s) => s.filterStatus)
   const setFilterStatus = useStore((s) => s.setFilterStatus)
+  const filterDate = useStore((s) => s.filterDate)
+  const setFilterDate = useStore((s) => s.setFilterDate)
+  const filterDateValue = useStore((s) => s.filterDateValue)
+  const filterDateEnd = useStore((s) => s.filterDateEnd)
+  const setDateRange = useStore((s) => s.setDateRange)
   const clearSelection = useStore((s) => s.clearSelection)
   const filterFavorite = useStore((s) => s.filterFavorite)
   const setFilterFavorite = useStore((s) => s.setFilterFavorite)
@@ -166,6 +172,39 @@ export default function SearchBar() {
                 className="px-3 py-2.5 rounded-xl border border-gray-200 dark:border-white/[0.08] bg-white dark:bg-gray-900 hover:bg-gray-50 dark:hover:bg-white/[0.06] text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400 transition"
               />
             </div>
+            <div className="relative w-[96px]">
+              <Select
+                value={filterDate}
+                onChange={(val) => {
+                  // 切到「指定日期」且尚未选过区间时，默认填今天
+                  if (val === 'specific' && !filterDateValue && !filterDateEnd) {
+                    const now = new Date()
+                    const pad = (n: number) => String(n).padStart(2, '0')
+                    const today = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`
+                    setDateRange(today, today)
+                  }
+                  setFilterDate(val as any)
+                  clearSelection()
+                }}
+                options={[
+                  { label: '不限日期', value: 'all' },
+                  { label: '今天', value: 'today' },
+                  { label: '最近7天', value: 'week' },
+                  { label: '最近30天', value: 'month' },
+                  { label: '指定日期', value: 'specific' },
+                ]}
+                className="px-3 py-2.5 rounded-xl border border-gray-200 dark:border-white/[0.08] bg-white dark:bg-gray-900 hover:bg-gray-50 dark:hover:bg-white/[0.06] text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400 transition"
+              />
+            </div>
+            {filterDate === 'specific' && (
+              <DateRangePicker
+                start={filterDateValue}
+                end={filterDateEnd}
+                onChange={(s, e) => { setDateRange(s, e); clearSelection() }}
+                placeholder="选择日期"
+                className="h-[42px] min-w-[150px] rounded-xl border border-gray-200 dark:border-white/[0.08] bg-white dark:bg-gray-900 px-3 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-white/[0.06] transition"
+              />
+            )}
             {isFailedFilter && (
               <button
                 type="button"

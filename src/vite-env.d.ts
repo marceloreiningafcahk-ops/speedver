@@ -1,5 +1,7 @@
 /// <reference types="vite/client" />
 
+declare const __LOCAL_DEFAULT_CONFIG_URL__: string
+
 declare const __APP_VERSION__: string
 declare const __DEV_PROXY_CONFIG__: unknown
 

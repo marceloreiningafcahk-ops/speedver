@@ -21,18 +21,10 @@ export default function InputParamsPanel({
   displaySize,
   qualityOptions,
   selectClass,
-  transparentOutputAvailable,
-  showTransparentOutputControl,
-  transparentOutputEnabled,
-  transparentOutputHint,
-  onTransparentOutputMenuOpenChange,
-  compressionHint,
-  compressionDisabled,
-  outputCompressionInput,
-  setOutputCompressionInput,
-  commitOutputCompression,
-  moderationHint,
-  moderationDisabled,
+  showProfileSwitcher,
+  profileOptions,
+  activeProfileId,
+  onSwitchProfile,
   agentAutoImageCount,
   outputImageLimit,
   nInput,
@@ -61,18 +53,10 @@ export default function InputParamsPanel({
   displaySize: string
   qualityOptions: Array<{ label: string; value: string }>
   selectClass: string
-  transparentOutputAvailable: boolean
-  showTransparentOutputControl: boolean
-  transparentOutputEnabled: boolean
-  transparentOutputHint: HintTooltipState
-  onTransparentOutputMenuOpenChange: (open: boolean) => void
-  compressionHint: HintTooltipState
-  compressionDisabled: boolean
-  outputCompressionInput: string
-  setOutputCompressionInput: (value: string) => void
-  commitOutputCompression: () => void
-  moderationHint: HintTooltipState
-  moderationDisabled: boolean
+  showProfileSwitcher: boolean
+  profileOptions: Array<{ label: string; value: string }>
+  activeProfileId: string
+  onSwitchProfile: (id: string) => void
   agentAutoImageCount: boolean
   outputImageLimit: number
   nInput: string
@@ -126,7 +110,7 @@ export default function InputParamsPanel({
         onTouchCancel={qualityHint.hide}
         onClick={qualityHint.show}
       >
-        <span className="text-gray-400 dark:text-gray-500 ml-1">质量</span>
+        <span className="text-gray-400 dark:text-gray-500 ml-1">思考程度</span>
         <Select
           value={activeProfile.codexCli ? 'auto' : isFalProvider && params.quality === 'auto' ? 'high' : params.quality}
           onChange={(val) => {
@@ -159,96 +143,6 @@ export default function InputParamsPanel({
             { label: 'WebP', value: 'webp' },
           ]}
           className={selectClass}
-        />
-      </label>
-      {showTransparentOutputControl ? (
-        <label
-          className="relative flex flex-col gap-0.5"
-          onMouseEnter={transparentOutputHint.show}
-          onMouseLeave={transparentOutputHint.hide}
-          onTouchStart={transparentOutputHint.startTouch}
-          onTouchEnd={transparentOutputHint.clearTimer}
-          onTouchCancel={transparentOutputHint.hide}
-          onClick={transparentOutputHint.show}
-        >
-          <span className="text-gray-400 dark:text-gray-500 ml-1">透明背景</span>
-          <Select
-            value={transparentOutputEnabled ? 'on' : 'off'}
-            onChange={(val) => {
-              if (!transparentOutputAvailable) return
-              setParams({ transparent_output: val === 'on', output_compression: null })
-            }}
-            options={[
-              { label: 'false', value: 'off' },
-              { label: 'true', value: 'on' },
-            ]}
-            className={selectClass}
-            onOpenChange={onTransparentOutputMenuOpenChange}
-          />
-          <ButtonTooltip
-            visible={transparentOutputHint.visible}
-            text="基于提示词与后处理，并非模型原生生成"
-          />
-        </label>
-      ) : (
-        <label
-          className="relative flex flex-col gap-0.5"
-          onMouseEnter={compressionHint.show}
-          onMouseLeave={compressionHint.hide}
-          onTouchStart={compressionHint.startTouch}
-          onTouchEnd={compressionHint.clearTimer}
-          onTouchCancel={compressionHint.hide}
-          onClick={compressionHint.show}
-        >
-          <span className="text-gray-400 dark:text-gray-500 ml-1">压缩率</span>
-          <input
-            value={outputCompressionInput}
-            onChange={(e) => setOutputCompressionInput(e.target.value)}
-            onBlur={commitOutputCompression}
-            disabled={compressionDisabled}
-            type="number"
-            min={0}
-            max={100}
-            placeholder="0-100"
-            className={`px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] focus:outline-none text-xs transition-all duration-200 shadow-sm ${
-              compressionDisabled
-                ? 'bg-gray-100/50 dark:bg-white/[0.05] opacity-50 cursor-not-allowed'
-                : 'bg-white/50 dark:bg-white/[0.03]'
-              }`}
-          />
-          <ButtonTooltip
-            visible={compressionHint.visible}
-            text={isFalProvider ? 'fal.ai 不支持压缩率参数' : '仅 JPEG 和 WebP 支持压缩率'}
-          />
-        </label>
-      )}
-      <label
-        className="relative flex flex-col gap-0.5"
-        onMouseEnter={moderationHint.show}
-        onMouseLeave={moderationHint.hide}
-        onTouchStart={moderationHint.startTouch}
-        onTouchEnd={moderationHint.clearTimer}
-        onTouchCancel={moderationHint.hide}
-        onClick={moderationHint.show}
-      >
-        <span className="text-gray-400 dark:text-gray-500 ml-1">审核</span>
-        <Select
-          value={moderationDisabled ? 'auto' : params.moderation}
-          onChange={(val) => {
-            if (!moderationDisabled) setParams({ moderation: val as TaskParams['moderation'] })
-          }}
-          options={[
-            { label: 'auto', value: 'auto' },
-            { label: 'low', value: 'low' },
-          ]}
-          disabled={moderationDisabled}
-          className={moderationDisabled
-            ? 'px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-gray-100/50 dark:bg-white/[0.05] opacity-50 cursor-not-allowed text-xs transition-all duration-200 shadow-sm'
-            : selectClass}
-        />
-        <ButtonTooltip
-          visible={moderationDisabled && moderationHint.visible}
-          text="fal.ai 不支持审核参数"
         />
       </label>
       <label
@@ -296,6 +190,17 @@ export default function InputParamsPanel({
         <ButtonTooltip visible={nLimitHint.visible} text={nLimitHintText} />
         <ButtonTooltip visible={streamConcurrentByN && streamConcurrentHint.visible && !nLimitHint.visible} text="数量大于 1 时会将多图生成拆分为并发单图" />
       </label>
+      {showProfileSwitcher && (
+        <label className="relative flex flex-col gap-0.5 col-span-2">
+          <span className="text-gray-400 dark:text-gray-500 ml-1">模型</span>
+          <Select
+            value={activeProfileId}
+            onChange={(val) => onSwitchProfile(val as string)}
+            options={profileOptions}
+            className={selectClass}
+          />
+        </label>
+      )}
     </div>
   )
 }

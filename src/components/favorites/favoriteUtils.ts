@@ -31,6 +31,6 @@ export function getCollectionTasks(collectionId: string, tasks: TaskRecord[]) {
 
 export function getLatestCoverTask(tasks: TaskRecord[]) {
   return [...tasks]
-    .filter((task) => task.outputImages?.length)
+    .filter((task) => task.outputImages?.length || task.kind === 'template')
     .sort((a, b) => b.createdAt - a.createdAt)[0]
 }

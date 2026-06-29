@@ -1,7 +1,7 @@
 import { zipSync } from 'fflate'
 import type { TaskRecord } from '../types'
 import { ensureImageCached } from '../store'
-import { getNumberedFileNameBase, sanitizeFileNamePart } from './exportFileName'
+import { getNumberedFileNameBase, sanitizeFileNamePart, formatExportFileTime } from './exportFileName'
 
 const MIME_EXTENSIONS: Record<string, string> = {
   'image/png': 'png',
@@ -38,6 +38,40 @@ export async function downloadImageIds(imageIds: string[], fileNameBase = 'image
       const fileName = multiple
         ? `${fileNameBase}-${order}.${getBlobExtension(blob)}`
         : `${fileNameBase}.${getBlobExtension(blob)}`
+      triggerDownload(blob, fileName)
+      successCount++
+      if (multiple) await delay(100)
+    } catch (err) {
+      console.error(err)
+      failCount++
+    }
+  }
+
+  return { successCount, failCount }
+}
+
+export async function downloadImageEntries(entries: DownloadImageZipEntry[]): Promise<DownloadImagesResult> {
+  if (entries.length === 0) return { successCount: 0, failCount: 0 }
+
+  let successCount = 0
+  let failCount = 0
+  const multiple = entries.length > 1
+  const usedNames = new Set<string>()
+
+  for (let index = 0; index < entries.length; index++) {
+    const entry = entries[index]
+    try {
+      const blob = await getImageBlob(entry.imageId)
+      const order = String(index + 1).padStart(2, '0')
+      const base = sanitizeFileNamePart(entry.fileNameBase || `image-${order}`) || `image-${order}`
+      const ext = getBlobExtension(blob)
+      let fileName = `${base}.${ext}`
+      let duplicateIndex = 2
+      while (usedNames.has(fileName)) {
+        fileName = `${base}-${String(duplicateIndex).padStart(2, '0')}.${ext}`
+        duplicateIndex++
+      }
+      usedNames.add(fileName)
       triggerDownload(blob, fileName)
       successCount++
       if (multiple) await delay(100)
@@ -92,7 +126,7 @@ export async function downloadImageEntriesAsZip(entries: DownloadImageZipEntry[]
 export function getTaskOutputImageZipEntries(tasks: TaskOutputZipTask[]): DownloadImageZipEntry[] {
   return [...tasks]
     .sort((a, b) => b.createdAt - a.createdAt)
-    .flatMap((task) => getImageZipEntries(task.outputImages || [], `task-${task.id}`))
+    .flatMap((task) => getImageZipEntries(task.outputImages || [], `task-${task.id}_${formatExportFileTime(new Date(task.createdAt))}`))
 }
 
 export function getImageZipEntries(imageIds: string[], fileNameBase = 'image'): DownloadImageZipEntry[] {

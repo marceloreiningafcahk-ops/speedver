@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type SVGProps } from 'react'
 import type { TaskRecord, FavoriteCollection } from '../../types'
 import { ensureImageThumbnailCached, subscribeImageThumbnail } from '../../store'
 import { TooltipButton as FavoriteActionButton } from '../TooltipButton'
-import { EditIcon, FavoriteIcon, TrashIcon } from '../icons'
+import { EditIcon, FavoriteIcon, TemplateIcon, TrashIcon } from '../icons'
 import type { CollectionCard } from './favoriteUtils'
 
 function FolderIcon(props: SVGProps<SVGSVGElement>) {
@@ -15,7 +15,9 @@ function FolderIcon(props: SVGProps<SVGSVGElement>) {
 
 function CoverThumbnail({ task }: { task?: TaskRecord }) {
   const [src, setSrc] = useState('')
-  const imageId = task?.outputImages?.[0]
+  const imageId = task?.kind === 'template'
+    ? task.templateCoverImageId ?? task.inputImageIds[0]
+    : task?.outputImages?.[0]
 
   useEffect(() => {
     setSrc('')
@@ -36,7 +38,7 @@ function CoverThumbnail({ task }: { task?: TaskRecord }) {
   if (src) return <img src={src} alt="" className="h-full w-full object-cover" />
   return (
     <div className="flex h-full w-full items-center justify-center bg-yellow-50 text-yellow-500 dark:bg-[#2a2211] dark:text-yellow-500">
-      <FavoriteIcon filled className="h-8 w-8 opacity-80" />
+      {task?.kind === 'template' ? <TemplateIcon className="h-8 w-8 opacity-80" /> : <FavoriteIcon filled className="h-8 w-8 opacity-80" />}
     </div>
   )
 }

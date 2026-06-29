@@ -1,7 +1,7 @@
-// ===== 设置 =====
+﻿// ===== 设置 =====
 
 export type ApiMode = 'images' | 'responses'
-export type AppMode = 'gallery' | 'agent'
+export type AppMode = 'gallery' | 'agent' | 'template'
 export type AgentApiConfigMode = 'off' | 'native' | 'hybrid'
 export type ReferenceImageEditAction = 'ask' | 'replace-reference' | 'add-mask'
 export const ZIP_DOWNLOAD_ROUTE_VALUES = [
@@ -113,6 +113,8 @@ export interface AppSettings {
   agentApiConfigMode: AgentApiConfigMode
   agentTextProfileId?: string | null
   agentImageProfileId?: string | null
+  /** 模板批量生图默认使用的 API 配置；为空则用当前激活配置 */
+  templateApiProfileId?: string | null
   profiles: ApiProfile[]
   activeProfileId: string
 }
@@ -160,6 +162,7 @@ export type TaskStatus = 'running' | 'done' | 'error'
 
 export interface TaskRecord {
   id: string
+  kind?: 'template'
   prompt: string
   params: TaskParams
   /** 生成时使用的 Provider 类型 */
@@ -218,6 +221,18 @@ export interface TaskRecord {
   isFavorite?: boolean
   /** 所属收藏夹 ID 列表 */
   favoriteCollectionIds?: string[]
+  customName?: string
+  customColor?: string
+  templateCoverImageId?: string | null
+  templateReplaceImageIndex?: number
+  /** 模板所属文件夹（模板集合）ID；导入的模板归入各自独立文件夹 */
+  templateCollectionId?: string | null
+  /** 模板文件夹显示名（一般为导入 ZIP 的文件名） */
+  templateCollectionName?: string
+  /** 由模板批量套用生成时，记录来源模板 ID */
+  sourceTemplateId?: string
+  /** 由模板批量套用生成时，记录来源模板名称 */
+  sourceTemplateName?: string
   /** 来源模式：画廊 / Agent */
   sourceMode?: AppMode
   /** Agent 对话 ID */
@@ -414,6 +429,11 @@ export interface FalApiResponse {
   seed?: number
 }
 
+export interface GeminiReferenceImage {
+  mimeType: string
+  data: string
+}
+
 // ===== 导出数据 =====
 
 /** ZIP manifest.json 格式 */
@@ -422,6 +442,7 @@ export interface ExportData {
   exportedAt: string
   settings?: AppSettings
   tasks?: TaskRecord[]
+  templates?: TaskRecord[]
   favoriteCollections?: FavoriteCollection[]
   defaultFavoriteCollectionId?: string | null
   agentConversations?: AgentConversation[]

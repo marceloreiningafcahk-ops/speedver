@@ -44,6 +44,7 @@ describe('exportZip', () => {
       exportedAt: 1700000001000,
       settings: {} as AppSettings,
       tasks: [task],
+      templates: [],
       images,
       thumbnailsByImageId: new Map([[thumbnail.id, thumbnail]]),
       favoriteCollections: [],

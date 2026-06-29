@@ -4,10 +4,9 @@ import { useVersionCheck } from '../hooks/useVersionCheck'
 import { useTooltip } from '../hooks/useTooltip'
 import { dismissAllTooltips } from '../lib/tooltipDismiss'
 import ViewportTooltip from './ViewportTooltip'
-import HelpModal from './HelpModal'
 import HistoryModal from './HistoryModal'
 import { useFavoriteCollectionTitle } from './FavoriteCollections'
-import { EditIcon, HelpCircleIcon, HistoryIcon, InstallIcon, SettingsIcon } from './icons'
+import { EditIcon, HistoryIcon, InstallIcon, SettingsIcon } from './icons'
 
 type BeforeInstallPromptEvent = Event & {
   prompt: () => Promise<void>
@@ -33,7 +32,6 @@ export default function Header() {
   const favoriteCollectionTitle = useFavoriteCollectionTitle()
   const showFavoriteCollectionTitle = appMode === 'gallery' && Boolean(activeFavoriteCollectionId)
   const { hasUpdate, latestRelease, dismiss } = useVersionCheck()
-  const [showHelp, setShowHelp] = useState(false)
   const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null)
   const [isPwaInstalled, setIsPwaInstalled] = useState(isInstalledPwa)
   const [hintVisible, setHintVisible] = useState(false)
@@ -84,7 +82,6 @@ export default function Header() {
   }, [appMode, agentMobileHeaderVisible])
 
   const installTooltip = useTooltip()
-  const helpTooltip = useTooltip()
   const settingsTooltip = useTooltip()
 
   useEffect(() => {
@@ -150,27 +147,8 @@ export default function Header() {
         <div className="safe-area-x safe-header-inner max-w-7xl mx-auto flex items-center justify-between relative">
           <div className="flex-1 min-w-0 pr-2 flex items-center gap-2">
             <h1 className="inline-flex min-w-0 items-start relative mr-2">
-              {showFavoriteCollectionTitle ? (
-                <>
-                  <span className="min-w-0 truncate text-[17px] font-bold tracking-tight text-gray-800 dark:text-gray-100 sm:hidden" title={favoriteCollectionTitle}>{favoriteCollectionTitle}</span>
-                  <a
-                    href="https://github.com/CookSleep/gpt_image_playground"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="hidden text-lg font-bold tracking-tight text-gray-800 transition-colors hover:text-gray-600 dark:text-gray-100 dark:hover:text-gray-300 sm:inline"
-                  >
-                    GPT Image Playground
-                  </a>
-                </>
-              ) : (
-                <a
-                  href="https://github.com/CookSleep/gpt_image_playground"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-[17px] sm:text-lg font-bold tracking-tight text-gray-800 dark:text-gray-100 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
-                >
-                  GPT Image Playground
-                </a>
+              {showFavoriteCollectionTitle && (
+                <span className="min-w-0 truncate text-[17px] sm:text-lg font-bold tracking-tight text-gray-800 dark:text-gray-100" title={favoriteCollectionTitle}>{favoriteCollectionTitle}</span>
               )}
               {hasUpdate && latestRelease && (
                 <a
@@ -178,7 +156,7 @@ export default function Header() {
                   target="_blank"
                   rel="noopener noreferrer"
                   onClick={dismiss}
-                  className="absolute -right-1 -top-1 translate-x-full -translate-y-1/4 px-1 py-0.5 rounded-[4px] border border-red-500/30 text-[9px] font-black bg-red-500 text-white hover:bg-red-600 transition-all animate-fade-in leading-none shadow-sm"
+                  className={`px-1 py-0.5 rounded-[4px] border border-red-500/30 text-[9px] font-black bg-red-500 text-white hover:bg-red-600 transition-all animate-fade-in leading-none shadow-sm ${showFavoriteCollectionTitle ? 'absolute -right-1 -top-1 translate-x-full -translate-y-1/4' : 'self-center'}`}
                   title={`新版本 ${latestRelease.tag}`}
                 >
                   NEW
@@ -241,14 +219,14 @@ export default function Header() {
               onClick={() => setAppMode('gallery')}
               className={`px-4 py-1.5 rounded-lg text-sm transition-colors ${appMode === 'gallery' ? 'bg-white dark:bg-white/10 text-gray-900 dark:text-white shadow-sm font-medium' : 'text-gray-500 hover:text-gray-800 dark:hover:text-gray-200'}`}
             >
-              画廊
+              生图模式
             </button>
             <button
               type="button"
-              onClick={() => setAppMode('agent')}
-              className={`px-4 py-1.5 rounded-lg text-sm transition-colors ${appMode === 'agent' ? 'bg-white dark:bg-white/10 text-gray-900 dark:text-white shadow-sm font-medium' : 'text-gray-500 hover:text-gray-800 dark:hover:text-gray-200'}`}
+              onClick={() => setAppMode('template')}
+              className={`px-4 py-1.5 rounded-lg text-sm transition-colors ${appMode === 'template' ? 'bg-white dark:bg-white/10 text-gray-900 dark:text-white shadow-sm font-medium' : 'text-gray-500 hover:text-gray-800 dark:hover:text-gray-200'}`}
             >
-              Agent
+              模板模式
             </button>
           </div>
           <div className="flex items-center gap-1 shrink-0">
@@ -274,24 +252,6 @@ export default function Header() {
             )}
             <div
               className="relative"
-              {...helpTooltip.handlers}
-            >
-              <button
-                onClick={() => {
-                  dismissAllTooltips()
-                  setShowHelp(true)
-                }}
-                className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-900 transition-colors"
-                aria-label="操作指南"
-              >
-                <HelpCircleIcon className="w-5 h-5 text-gray-600 dark:text-gray-400" />
-              </button>
-              <ViewportTooltip visible={helpTooltip.visible} className="whitespace-nowrap">
-                操作指南
-              </ViewportTooltip>
-            </div>
-            <div
-              className="relative"
               {...settingsTooltip.handlers}
             >
               <button
@@ -314,14 +274,14 @@ export default function Header() {
               onClick={() => setAppMode('gallery')}
               className={`px-4 py-1.5 rounded-lg text-sm transition-colors ${appMode === 'gallery' ? 'bg-white dark:bg-white/10 text-gray-900 dark:text-white shadow-sm font-medium' : 'text-gray-500 hover:text-gray-800 dark:hover:text-gray-200'}`}
             >
-              画廊
+              生图模式
             </button>
             <button
               type="button"
-              onClick={() => setAppMode('agent')}
-              className={`px-4 py-1.5 rounded-lg text-sm transition-colors ${appMode === 'agent' ? 'bg-white dark:bg-white/10 text-gray-900 dark:text-white shadow-sm font-medium' : 'text-gray-500 hover:text-gray-800 dark:hover:text-gray-200'}`}
+              onClick={() => setAppMode('template')}
+              className={`px-4 py-1.5 rounded-lg text-sm transition-colors ${appMode === 'template' ? 'bg-white dark:bg-white/10 text-gray-900 dark:text-white shadow-sm font-medium' : 'text-gray-500 hover:text-gray-800 dark:hover:text-gray-200'}`}
             >
-              Agent
+              模板模式
             </button>
           </div>
         </div>
@@ -342,7 +302,6 @@ export default function Header() {
           </div>
         </div>
       </div>
-      {showHelp && <HelpModal appMode={appMode} isFavoriteCollectionOverview={appMode === 'gallery' && filterFavorite && !activeFavoriteCollectionId} onClose={() => setShowHelp(false)} />}
     </>
   )
 }

@@ -616,7 +616,7 @@ describe('custom providers', () => {
       ],
     })
 
-    expect(settings.providerOrder).toEqual(['fal', 'openai', 'custom-alpha', 'custom-beta'])
+    expect(settings.providerOrder).toEqual(['fal', 'openai', 'gemini-tikapi', 'custom-alpha', 'custom-beta'])
   })
 
   it('keeps active custom providers in Images API mode when legacy apiMode is responses', () => {

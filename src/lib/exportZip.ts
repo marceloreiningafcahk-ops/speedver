@@ -16,6 +16,7 @@ export interface BuildExportZipParams {
   exportedAt: number
   settings: AppSettings
   tasks: TaskRecord[]
+  templates: TaskRecord[]
   images: StoredImage[]
   thumbnailsByImageId: Map<string, StoredImageThumbnail>
   favoriteCollections: FavoriteCollection[]
@@ -30,8 +31,9 @@ export interface ExportZipContents {
 
 export function buildExportZip(params: BuildExportZipParams) {
   const exportedAtDate = new Date(params.exportedAt)
-  const imageCreatedAtFallback = getImageCreatedAtFallback(params.options.exportTasks ? params.tasks : [])
-  const imageFileNameBases = getImageFileNameBases(params.options.exportTasks ? params.tasks : [])
+  const allTasks = params.options.exportTasks ? [...params.tasks, ...params.templates] : []
+  const imageCreatedAtFallback = getImageCreatedAtFallback(allTasks)
+  const imageFileNameBases = getImageFileNameBases(allTasks)
   const imageFiles: ExportData['imageFiles'] = {}
   const thumbnailFiles: NonNullable<ExportData['thumbnailFiles']> = {}
   const zipFiles: ZipFiles = {}
@@ -77,6 +79,7 @@ export function buildExportZip(params: BuildExportZipParams) {
   if (params.options.exportConfig) manifest.settings = params.settings
   if (params.options.exportTasks) {
     manifest.tasks = params.tasks
+    manifest.templates = params.templates
     manifest.favoriteCollections = params.favoriteCollections
     manifest.defaultFavoriteCollectionId = params.defaultFavoriteCollectionId
     manifest.agentConversations = params.agentConversations

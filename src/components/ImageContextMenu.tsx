@@ -105,7 +105,7 @@ export default function ImageContextMenu() {
         const tasks = useStore.getState().tasks
         const matchedTask = tasks.find(t => t.outputImages?.includes(imageId))
         if (matchedTask) {
-          fileNameBase = `task-${matchedTask.id}`
+          fileNameBase = `task-${matchedTask.id}_${formatExportFileTime(new Date(matchedTask.createdAt))}`
         } else {
           fileNameBase = `image-${imageId}`
         }
@@ -138,7 +138,7 @@ export default function ImageContextMenu() {
         const tasks = useStore.getState().tasks
         const matchedTask = tasks.find(t => t.outputImages?.includes(outputImageIds[0]))
         if (matchedTask) {
-          fileNameBase = `task-${matchedTask.id}`
+          fileNameBase = `task-${matchedTask.id}_${formatExportFileTime(new Date(matchedTask.createdAt))}`
         }
       }
       if (!fileNameBase) {

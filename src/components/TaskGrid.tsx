@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState, useEffect } from 'react'
-import { ALL_FAVORITES_COLLECTION_ID, getTaskFavoriteCollectionIds, useStore, reuseConfig, editOutputs, removeTask, taskMatchesFilterStatus, taskMatchesSearchQuery } from '../store'
+import { ALL_FAVORITES_COLLECTION_ID, getTaskFavoriteCollectionIds, useStore, reuseConfig, editOutputs, removeTask, taskMatchesFilterStatus, taskMatchesFilterDate, taskMatchesSearchQuery } from '../store'
 import TaskCard from './TaskCard'
 
 export default function TaskGrid() {
@@ -7,6 +7,9 @@ export default function TaskGrid() {
   const searchQuery = useStore((s) => s.searchQuery)
   const filterStatus = useStore((s) => s.filterStatus)
   const filterFavorite = useStore((s) => s.filterFavorite)
+  const filterDate = useStore((s) => s.filterDate)
+  const filterDateValue = useStore((s) => s.filterDateValue)
+  const filterDateEnd = useStore((s) => s.filterDateEnd)
   const activeFavoriteCollectionId = useStore((s) => s.activeFavoriteCollectionId)
   const setDetailTaskId = useStore((s) => s.setDetailTaskId)
   const setConfirmDialog = useStore((s) => s.setConfirmDialog)
@@ -30,7 +33,9 @@ export default function TaskGrid() {
   const isMac = /Mac|iPod|iPhone|iPad/.test(navigator.platform)
 
   const filteredTasks = useMemo(() => {
-    const sorted = [...tasks].sort((a, b) => b.createdAt - a.createdAt)
+    const sorted = [...tasks]
+      .filter((task) => task.kind !== 'template')
+      .sort((a, b) => b.createdAt - a.createdAt)
     const q = searchQuery.trim().toLowerCase()
     
     return sorted.filter((t) => {
@@ -39,9 +44,10 @@ export default function TaskGrid() {
         if (activeFavoriteCollectionId && activeFavoriteCollectionId !== ALL_FAVORITES_COLLECTION_ID && !getTaskFavoriteCollectionIds(t).includes(activeFavoriteCollectionId)) return false
       }
       if (!taskMatchesFilterStatus(t, filterStatus)) return false
+      if (!taskMatchesFilterDate(t, filterDate, filterDateValue, filterDateEnd)) return false
       return taskMatchesSearchQuery(t, q)
     })
-  }, [tasks, searchQuery, filterStatus, filterFavorite, activeFavoriteCollectionId])
+  }, [tasks, searchQuery, filterStatus, filterFavorite, filterDate, filterDateValue, filterDateEnd, activeFavoriteCollectionId])
 
   const handleDelete = (task: typeof tasks[0]) => {
     setConfirmDialog({

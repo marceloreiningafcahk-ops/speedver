@@ -1,4 +1,4 @@
-import type { AppSettings, TaskParams } from '../types'
+import type { AppSettings, GeminiReferenceImage, TaskParams } from '../types'
 import { blobToDataUrl } from './dataUrl'
 
 export const MIME_MAP: Record<string, string> = {
@@ -16,6 +16,8 @@ export interface CallApiOptions {
   params: TaskParams
   /** 输入图片的 data URL 列表 */
   inputImageDataUrls: string[]
+  /** Gemini 3 Pro (TikAPI) 专用参考图，普通 OpenAI/Fal/自定义服务商忽略。 */
+  geminiReferenceImage?: GeminiReferenceImage
   maskDataUrl?: string
   onFalRequestEnqueued?: (request: { requestId: string; endpoint: string }) => void
   onCustomTaskEnqueued?: (task: { taskId: string }) => void

@@ -10,6 +10,8 @@ import Header from './components/Header'
 import SearchBar from './components/SearchBar'
 import TaskGrid from './components/TaskGrid'
 import AgentWorkspace from './components/AgentWorkspace'
+import TemplateWorkspace from './components/TemplateWorkspace'
+import SaveTemplateModal from './components/SaveTemplateModal'
 import InputBar from './components/InputBar'
 import DetailModal from './components/DetailModal'
 import Lightbox from './components/Lightbox'
@@ -18,7 +20,6 @@ import ConfirmDialog from './components/ConfirmDialog'
 import Toast from './components/Toast'
 import MaskEditorModal from './components/MaskEditorModal'
 import ImageContextMenu from './components/ImageContextMenu'
-import SupportPromptModal from './components/SupportPromptModal'
 import { FavoriteCollectionPickerModal, FavoriteCollectionsView, ManageCollectionsModal } from './components/FavoriteCollections'
 import { useGlobalClickSuppression } from './lib/clickSuppression'
 
@@ -29,6 +30,7 @@ export default function App() {
   const appMode = useStore((s) => s.appMode)
   const filterFavorite = useStore((s) => s.filterFavorite)
   const activeFavoriteCollectionId = useStore((s) => s.activeFavoriteCollectionId)
+  const showSaveTemplateModal = useStore((s) => s.showSaveTemplateModal)
   useDockerApiUrlMigrationNotice()
   useGlobalClickSuppression()
 
@@ -112,6 +114,8 @@ export default function App() {
       <Header />
       {appMode === 'agent' ? (
         <AgentWorkspace />
+      ) : appMode === 'template' ? (
+        <TemplateWorkspace />
       ) : (
         <main data-home-main data-drag-select-surface className="pb-48">
           <div className="safe-area-x max-w-7xl mx-auto">
@@ -120,12 +124,12 @@ export default function App() {
           </div>
         </main>
       )}
-      <InputBar />
+      {appMode !== 'template' && <InputBar />}
+      {showSaveTemplateModal && <SaveTemplateModal />}
       <DetailModal />
       <Lightbox />
       <SettingsModal />
       <ConfirmDialog />
-      <SupportPromptModal />
       <FavoriteCollectionPickerModal />
       <ManageCollectionsModal />
       <Toast />

@@ -9,6 +9,7 @@ import { copyImageSourceToClipboard, copyTextToClipboard, getClipboardFailureMes
 import { createMaskPreviewDataUrl } from '../lib/canvasImage'
 import { dismissAllTooltips } from '../lib/tooltipDismiss'
 import { downloadImageEntriesAsZip, downloadImageIds, getImageZipEntries } from '../lib/downloadImages'
+import { formatExportFileTime } from '../lib/exportFileName'
 import { isAgentTaskPromptPending } from '../lib/taskPromptDisplay'
 import { replaceImageMentionsForApi } from '../lib/promptImageMentions'
 import { CloseIcon, CodeIcon, CopyIcon, DownloadIcon, EditIcon, LinkIcon, TrashIcon } from './icons'
@@ -235,6 +236,22 @@ export default function DetailModal() {
   const showReferenceSection = allInputImageIds.length > 0 || isAgentEditTool
 
   const outputLen = outputSlots.length
+  const outputGridSize = 4
+  const hasOutputGrid = task.status === 'done' && outputLen > 1
+  const outputPageIndex = hasOutputGrid ? Math.floor(imageIndex / outputGridSize) : 0
+  const outputPageCount = hasOutputGrid ? Math.max(1, Math.ceil(outputLen / outputGridSize)) : 1
+  const outputPageStart = outputPageIndex * outputGridSize
+  const outputPageSlots = hasOutputGrid ? outputSlots.slice(outputPageStart, outputPageStart + outputGridSize) : []
+  const canGoPrevOutputPage = hasOutputGrid && outputPageIndex > 0
+  const canGoNextOutputPage = hasOutputGrid && outputPageIndex < outputPageCount - 1
+  const goPrevOutputPage = () => {
+    if (!canGoPrevOutputPage) return
+    setImageIndex(Math.max(0, imageIndex - outputGridSize))
+  }
+  const goNextOutputPage = () => {
+    if (!canGoNextOutputPage) return
+    setImageIndex(Math.min(outputLen - 1, imageIndex + outputGridSize))
+  }
   const currentImageRatio = currentOutputImageId ? imageRatios[currentOutputImageId] : ''
   const currentImageSize = currentOutputImageId ? imageSizes[currentOutputImageId] : ''
   const baseActualParams = currentOutputImageId
@@ -358,7 +375,7 @@ export default function DetailModal() {
     if (!currentOutputImageId || !task) return
 
     try {
-      const result = await downloadImageIds([currentOutputImageId], `task-${task.id}`)
+      const result = await downloadImageIds([currentOutputImageId], `task-${task.id}_${formatExportFileTime(new Date(task.createdAt))}`)
       if (result.successCount === 0) {
         showToast('下载失败', 'error')
       } else {
@@ -375,7 +392,7 @@ export default function DetailModal() {
     if (!currentOriginalOutputImageId || !task) return
 
     try {
-      const result = await downloadImageIds([currentOriginalOutputImageId], `task-${task.id}-orig`)
+      const result = await downloadImageIds([currentOriginalOutputImageId], `task-${task.id}-orig_${formatExportFileTime(new Date(task.createdAt))}`)
       if (result.successCount === 0) {
         showToast('下载失败', 'error')
       } else {
@@ -392,7 +409,7 @@ export default function DetailModal() {
     if (!task?.outputImages?.length) return
 
     try {
-      const fileNameBase = `task-${task.id}`
+      const fileNameBase = `task-${task.id}_${formatExportFileTime(new Date(task.createdAt))}`
       const result = settings.zipDownloadRoutes.includes('task-detail-all')
         ? await downloadImageEntriesAsZip(getImageZipEntries(task.outputImages, fileNameBase), fileNameBase)
         : await downloadImageIds(task.outputImages, fileNameBase)
@@ -413,7 +430,7 @@ export default function DetailModal() {
     if (!task || !streamPartialImageIds.length) return
 
     try {
-      const fileNameBase = `task-${task.id}-partial`
+      const fileNameBase = `task-${task.id}-partial_${formatExportFileTime(new Date(task.createdAt))}`
       const result = settings.zipDownloadRoutes.includes('task-detail-partial')
         ? await downloadImageEntriesAsZip(getImageZipEntries(streamPartialImageIds, fileNameBase), fileNameBase)
         : await downloadImageIds(streamPartialImageIds, fileNameBase)
@@ -459,7 +476,7 @@ export default function DetailModal() {
 
         {/* 左侧：图片 */}
         <div className="md:w-1/2 w-full h-64 md:h-auto bg-gray-100 dark:bg-black/20 relative flex items-center justify-center flex-shrink-0 min-h-[16rem]">
-          {task.status === 'done' && outputLen > 0 && (currentOutputImageId || task.outputImages.length > 0) && (
+          {task.status === 'done' && outputLen > 0 && !hasOutputGrid && (currentOutputImageId || task.outputImages.length > 0) && (
             <div className="absolute right-3 top-[15px] z-20 flex items-center gap-1.5">
               {currentOutputImageId && (
                 <div className="relative group flex">
@@ -502,7 +519,152 @@ export default function DetailModal() {
               )}
             </div>
           )}
-          {task.status === 'done' && outputLen > 0 && currentOutputPreviewSrc && (
+          {hasOutputGrid && (
+            <>
+              <div className="absolute right-3 top-[15px] z-20 flex items-center gap-1.5">
+                {task.outputImages.length > 1 && (
+                  <div className="relative group flex">
+                    <button
+                      type="button"
+                      {...downloadAllTooltip.handlers}
+                      onClick={(e) => {
+                        downloadAllTooltip.handlers.onClick()
+                        handleDownloadAllOutputs(e)
+                      }}
+                      className="flex items-center justify-center pl-1.5 pr-2 py-0.5 gap-0.5 bg-black/50 text-white rounded backdrop-blur-sm hover:bg-black/70 transition focus:outline-none focus:ring-1 focus:ring-white/50"
+                      aria-label="涓嬭浇鍏ㄩ儴"
+                    >
+                      <DownloadIcon className="h-4 w-4" />
+                      <span className="text-[9px] font-bold leading-none mt-[1px]">ALL</span>
+                    </button>
+                    <ViewportTooltip visible={downloadAllTooltip.visible} className="whitespace-nowrap">
+                      涓嬭浇鍏ㄩ儴
+                    </ViewportTooltip>
+                  </div>
+                )}
+              </div>
+              <div className="relative flex h-full w-full items-center justify-center p-4">
+                <div className="grid aspect-square w-full max-w-[calc(100%-2rem)] grid-cols-2 grid-rows-2 gap-2">
+                  {Array.from({ length: outputGridSize }, (_, slotIndex) => {
+                    const slot = outputPageSlots[slotIndex]
+                    const slotImageId = slot?.imageId || ''
+                    const slotError = slot?.error || ''
+                    const slotPreviewSrc = slotImageId ? outputPreviewSrcs[slotImageId] || '' : ''
+
+                    if (!slot) {
+                      return (
+                        <div
+                          key={`empty-${slotIndex}`}
+                          className="flex aspect-square items-center justify-center rounded-2xl border border-dashed border-gray-300/70 bg-white/40 text-[11px] text-gray-400 dark:border-white/[0.08] dark:bg-white/[0.03]"
+                        >
+                          -
+                        </div>
+                      )
+                    }
+
+                    if (slotError) {
+                      return (
+                        <div
+                          key={`error-${slot.requestIndex}`}
+                          className="flex aspect-square items-center justify-center rounded-2xl border border-red-200/80 bg-red-50/70 p-3 text-center dark:border-red-500/20 dark:bg-red-500/10"
+                        >
+                          <div className="max-w-full">
+                            <svg className="mx-auto mb-1 h-6 w-6 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
+                            <p className="text-[11px] font-medium leading-4 text-red-500">
+                              第{slot.requestIndex + 1}张生成失败
+                            </p>
+                            <p
+                              className="mt-1 overflow-hidden whitespace-pre-line text-[10px] leading-4 text-red-500 break-words"
+                              style={{
+                                display: '-webkit-box',
+                                WebkitBoxOrient: 'vertical',
+                                WebkitLineClamp: 4,
+                              }}
+                            >
+                              {slotError}
+                            </p>
+                          </div>
+                        </div>
+                      )
+                    }
+
+                    return (
+                      <button
+                        key={slot.imageId}
+                        type="button"
+                        className="group relative aspect-square overflow-hidden rounded-2xl border border-gray-200/80 bg-gray-100 transition hover:scale-[1.01] hover:shadow-sm dark:border-white/[0.08] dark:bg-black/20"
+                        onClick={() => setLightboxImageId(slotImageId, task.outputImages)}
+                        aria-label={`打开第${slot.requestIndex + 1}张图片`}
+                      >
+                        {slotPreviewSrc ? (
+                          <img
+                            src={slotPreviewSrc}
+                            data-image-id={slotImageId}
+                            className="h-full w-full object-contain"
+                            alt=""
+                            onLoad={(e) => {
+                              const image = e.currentTarget
+                              if (slotImageId && image.naturalWidth > 0 && image.naturalHeight > 0) {
+                                setImageRatios((prev) => ({
+                                  ...prev,
+                                  [slotImageId]: formatImageRatio(image.naturalWidth, image.naturalHeight),
+                                }))
+                                setImageSizes((prev) => ({
+                                  ...prev,
+                                  [slotImageId]: `${image.naturalWidth}脳${image.naturalHeight}`,
+                                }))
+                              }
+                            }}
+                          />
+                        ) : (
+                          <div className="flex h-full w-full items-center justify-center">
+                            <svg className="h-8 w-8 animate-pulse text-gray-300 dark:text-white/20" viewBox="0 0 24 24" fill="none">
+                              <path d="M4 6h16v12H4z" stroke="currentColor" strokeWidth="1.5" />
+                              <path d="M8 10.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z" fill="currentColor" />
+                              <path d="m4 16 5-5 3 3 3-4 5 6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                            </svg>
+                          </div>
+                        )}
+                        <span className="pointer-events-none absolute left-2 top-2 rounded bg-black/50 px-1.5 py-0.5 text-[10px] leading-none text-white backdrop-blur-sm">
+                          {slot.requestIndex + 1}
+                        </span>
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+              {outputPageCount > 1 && (
+                <>
+                  <button
+                    onClick={goPrevOutputPage}
+                    disabled={!canGoPrevOutputPage}
+                    className="absolute left-2 top-1/2 -translate-y-1/2 rounded-full bg-black/30 p-1.5 text-white transition hover:bg-black/50 disabled:cursor-not-allowed disabled:opacity-30"
+                    aria-label="上一页"
+                  >
+                    <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                    </svg>
+                  </button>
+                  <button
+                    onClick={goNextOutputPage}
+                    disabled={!canGoNextOutputPage}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full bg-black/30 p-1.5 text-white transition hover:bg-black/50 disabled:cursor-not-allowed disabled:opacity-30"
+                    aria-label="下一页"
+                  >
+                    <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                    </svg>
+                  </button>
+                  <span className="absolute bottom-2 left-1/2 -translate-x-1/2 rounded-full bg-black/50 px-2 py-0.5 text-xs text-white">
+                    {outputPageIndex + 1} / {outputPageCount}
+                  </span>
+                </>
+              )}
+            </>
+          )}
+          {!hasOutputGrid && task.status === 'done' && outputLen > 0 && currentOutputPreviewSrc && (
             <>
               <img
                 src={currentOutputPreviewSrc}

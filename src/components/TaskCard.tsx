@@ -538,16 +538,17 @@ export default function TaskCard({
         {/* 右侧信息区域 */}
         <div className="flex-1 p-3 flex flex-col min-w-0">
           <div className="flex-1 min-h-0 mb-2 overflow-hidden">
-            {showPendingPrompt ? (
-              <div className="leading-relaxed">
-                <p className="text-sm text-gray-700 dark:text-gray-300">正在生成……</p>
-                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">输入内容将在响应完成时接收</p>
-              </div>
-            ) : (
-              <p className="text-sm text-gray-700 dark:text-gray-300 leading-relaxed line-clamp-3">
-                {task.prompt || '(无提示词)'}
-              </p>
-            )}
+            <p
+              className="text-sm text-gray-700 dark:text-gray-300 leading-relaxed overflow-hidden text-ellipsis"
+              style={{
+                display: '-webkit-box',
+                WebkitLineClamp: 3,
+                WebkitBoxOrient: 'vertical',
+              }}
+              title={task.prompt || '(无提示词)'}
+            >
+              {showPendingPrompt ? '正在生成……' : (task.prompt || '(无提示词)')}
+            </p>
           </div>
           <div className="mt-auto flex flex-col gap-1.5">
             {/* 参数与信息：横向滚动 */}

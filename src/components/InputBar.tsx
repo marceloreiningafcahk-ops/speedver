@@ -10,9 +10,9 @@ import { createMaskPreviewDataUrl } from '../lib/canvasImage'
 import { getSafeBoundingClientRect } from '../lib/domRect'
 import { collectAgentRoundOutputImageSlots } from '../lib/agentImageReferences'
 import { useHintTooltip } from '../hooks/useHintTooltip'
-import { downloadImageEntriesAsZip, downloadImageIds, formatExportFileTime, getTaskOutputImageZipEntries } from '../lib/downloadImages'
+import { downloadImageEntries, downloadImageEntriesAsZip, formatExportFileTime, getTaskOutputImageZipEntries } from '../lib/downloadImages'
 import SizePickerModal from './SizePickerModal'
-import { CloseIcon } from './icons'
+import { CloseIcon, TemplateIcon } from './icons'
 import ButtonTooltip from './input/buttonTooltip'
 import DragUploadOverlay from './input/dragUploadOverlay'
 import InputBatchBars from './input/inputBatchBars'
@@ -398,7 +398,9 @@ export default function InputBar() {
   const settings = useStore((s) => s.settings)
   const setSettings = useStore((s) => s.setSettings)
   const reusedTaskApiProfileId = useStore((s) => s.reusedTaskApiProfileId)
+  const setReusedTaskApiProfile = useStore((s) => s.setReusedTaskApiProfile)
   const setShowSettings = useStore((s) => s.setShowSettings)
+  const setShowSaveTemplateModal = useStore((s) => s.setShowSaveTemplateModal)
   const setLightboxImageId = useStore((s) => s.setLightboxImageId)
   const showToast = useStore((s) => s.showToast)
   const setConfirmDialog = useStore((s) => s.setConfirmDialog)
@@ -515,7 +517,7 @@ export default function InputBar() {
       const fileNameBase = `batch-${timeStr}`
       const { successCount, failCount } = settings.zipDownloadRoutes.includes('task-selection')
         ? await downloadImageEntriesAsZip(getTaskOutputImageZipEntries(selectedTasks), fileNameBase)
-        : await downloadImageIds(imageIds, fileNameBase)
+        : await downloadImageEntries(getTaskOutputImageZipEntries(selectedTasks))
 
       if (successCount === 0) {
         showToast('下载失败', 'error')
@@ -551,7 +553,7 @@ export default function InputBar() {
           : `favorites-${collection.name}-${timeStr}`
         const result = useZipDownload
           ? await downloadImageEntriesAsZip(entries, zipName)
-          : await downloadImageIds(entries.map((entry) => entry.imageId), zipName)
+          : await downloadImageEntries(entries)
         successCount += result.successCount
         failCount += result.failCount
         if (result.successCount > 0) downloadedCollectionCount++
@@ -682,9 +684,6 @@ export default function InputBar() {
     }
   }, [updateInputBarClearance])
   const imageHintTimerRef = useRef<number | null>(null)
-  const [outputCompressionInput, setOutputCompressionInput] = useState(
-    params.output_compression == null ? '' : String(params.output_compression),
-  )
   const [nInput, setNInput] = useState(String(params.n))
   const [nInputFocused, setNInputFocused] = useState(false)
   const dragCounter = useRef(0)
@@ -741,11 +740,6 @@ export default function InputBar() {
   const activeProvider = activeProfile.provider
   const isFalProvider = activeProvider === 'fal'
   const agentAutoImageCount = appMode === 'agent'
-  const moderationDisabled = isFalProvider
-  const transparentOutputAvailable = appMode === 'gallery'
-  const showTransparentOutputControl = transparentOutputAvailable && params.output_format === 'png'
-  const transparentOutputEnabled = transparentOutputAvailable && showTransparentOutputControl && params.transparent_output
-  const compressionDisabled = params.output_format === 'png' || isFalProvider
   const outputImageLimit = getOutputImageLimitForSettings(effectiveSettings)
   const isFalTextToImage = isFalProvider && inputImages.length === 0
   const nDraftValue = Number(nInput)
@@ -774,12 +768,30 @@ export default function InputBar() {
       ]
   const atImageLimit = inputImages.length >= API_MAX_IMAGES
   const uploadImageTooltipText = atImageLimit ? `参考图数量已达上限（${API_MAX_IMAGES} 张），无法继续添加` : '上传图片'
-  const transparentOutputHint = useHintTooltip()
-  const handleTransparentOutputMenuOpenChange = useCallback((open: boolean) => {
-    if (open) transparentOutputHint.hide()
-  }, [transparentOutputHint.hide])
-  const compressionHint = useHintTooltip({ enabled: () => compressionDisabled })
-  const moderationHint = useHintTooltip({ enabled: () => moderationDisabled })
+  // 配置切换：仅画廊模式可用，Agent 模式的文/图配置在设置中单独指定
+  const showProfileSwitcher = appMode === 'gallery'
+  const profileOptions = useMemo(
+    () => settings.profiles.map((profile) => ({ label: profile.name, value: profile.id })),
+    [settings.profiles],
+  )
+  const handleSwitchProfile = useCallback((id: string) => {
+    if (id === activeProfile.id) return
+    // 临时复用任务配置时，切换配置应清除复用状态，使选择立即生效
+    if (reusedTaskApiProfileId) setReusedTaskApiProfile(null)
+    setSettings({ activeProfileId: id })
+  }, [activeProfile.id, reusedTaskApiProfileId, setReusedTaskApiProfile, setSettings])
+  // 保存为模板：校验后打开弹窗（不调用 API）
+  const handleOpenSaveTemplate = useCallback(() => {
+    if (!prompt.trim()) {
+      showToast('请先输入提示词', 'error')
+      return
+    }
+    if (!inputImages.length) {
+      showToast('请先添加模板参考图', 'error')
+      return
+    }
+    setShowSaveTemplateModal(true)
+  }, [prompt, inputImages.length, showToast, setShowSaveTemplateModal])
   const sizeHint = useHintTooltip({ enabled: () => isFalTextToImage })
   const qualityHint = useHintTooltip({ enabled: () => activeProfile.codexCli || isFalProvider })
   const nLimitHint = useHintTooltip({ autoHideMs: 2000 })
@@ -904,12 +916,6 @@ export default function InputBar() {
   }, [setPrompt])
 
   useEffect(() => {
-    setOutputCompressionInput(
-      params.output_compression == null ? '' : String(params.output_compression),
-    )
-  }, [params.output_compression])
-
-  useEffect(() => {
     setNInput(agentAutoImageCount ? 'auto' : String(params.n))
   }, [agentAutoImageCount, params.n])
 
@@ -947,23 +953,6 @@ export default function InputBar() {
       cancelled = true
     }
   }, [maskDraft, maskTargetImage?.id, maskTargetImage?.dataUrl])
-
-  const commitOutputCompression = useCallback(() => {
-    if (outputCompressionInput.trim() === '') {
-      setOutputCompressionInput('')
-      setParams({ output_compression: null })
-      return
-    }
-
-    const nextValue = Number(outputCompressionInput)
-    if (Number.isNaN(nextValue)) {
-      setOutputCompressionInput(params.output_compression == null ? '' : String(params.output_compression))
-      return
-    }
-
-    setOutputCompressionInput(String(nextValue))
-    setParams({ output_compression: nextValue })
-  }, [outputCompressionInput, params.output_compression, setParams])
 
   const commitN = useCallback(() => {
     nLimitHint.hide()
@@ -1894,18 +1883,10 @@ export default function InputBar() {
       displaySize={displaySize}
       qualityOptions={qualityOptions}
       selectClass={selectClass}
-      transparentOutputAvailable={transparentOutputAvailable}
-      showTransparentOutputControl={showTransparentOutputControl}
-      transparentOutputEnabled={transparentOutputEnabled}
-      transparentOutputHint={transparentOutputHint}
-      onTransparentOutputMenuOpenChange={handleTransparentOutputMenuOpenChange}
-      compressionHint={compressionHint}
-      compressionDisabled={compressionDisabled}
-      outputCompressionInput={outputCompressionInput}
-      setOutputCompressionInput={setOutputCompressionInput}
-      commitOutputCompression={commitOutputCompression}
-      moderationHint={moderationHint}
-      moderationDisabled={moderationDisabled}
+      showProfileSwitcher={showProfileSwitcher}
+      profileOptions={profileOptions}
+      activeProfileId={activeProfile.id}
+      onSwitchProfile={handleSwitchProfile}
       agentAutoImageCount={agentAutoImageCount}
       outputImageLimit={outputImageLimit}
       nInput={nInput}
@@ -2101,6 +2082,16 @@ export default function InputBar() {
               {renderParams('grid-cols-6')}
 
               <div className="flex gap-2 flex-shrink-0 mb-0.5">
+                {appMode === 'gallery' && (
+                  <button
+                    onClick={handleOpenSaveTemplate}
+                    className="p-2.5 rounded-xl transition-all shadow-sm bg-gray-200 dark:bg-white/[0.06] hover:bg-gray-300 dark:hover:bg-white/[0.1] text-gray-500 dark:text-gray-300 hover:shadow"
+                    aria-label="保存为模板"
+                    title="保存为模板"
+                  >
+                    <TemplateIcon className="w-5 h-5" />
+                  </button>
+                )}
                 <div
                   className="relative"
                   onMouseEnter={() => setAttachHover(true)}
