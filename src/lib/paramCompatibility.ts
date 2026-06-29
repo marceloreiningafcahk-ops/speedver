@@ -23,7 +23,7 @@ export function normalizeParamsForSettings(
     n: Math.min(outputImageLimit, Math.max(1, params.n || DEFAULT_PARAMS.n)),
   }
 
-  if (activeProfile.provider === 'openai' && activeProfile.codexCli) {
+  if ((activeProfile.provider === 'openai' && activeProfile.codexCli) || !activeProfile.model.toLowerCase().includes('gpt')) {
     nextParams.quality = DEFAULT_PARAMS.quality
   }
 

@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import type { ApiProfile, TaskParams } from '../../types'
 import { dismissAllTooltips } from '../../lib/tooltipDismiss'
 import Select from '../Select'
@@ -76,6 +77,11 @@ export default function InputParamsPanel({
   qualityHint: HintTooltipState
   onOpenSizePicker: () => void
 }) {
+  const qualityDisabled = activeProfile.codexCli || !activeProfile.model.toLowerCase().includes('gpt')
+  useEffect(() => {
+    if (qualityDisabled && params.quality !== 'auto') setParams({ quality: 'auto' })
+  }, [params.quality, qualityDisabled, setParams])
+
   return (
     <div className={`grid ${cols} gap-2 text-xs flex-1`}>
       <label
@@ -112,19 +118,23 @@ export default function InputParamsPanel({
       >
         <span className="text-gray-400 dark:text-gray-500 ml-1">思考程度</span>
         <Select
-          value={activeProfile.codexCli ? 'auto' : isFalProvider && params.quality === 'auto' ? 'high' : params.quality}
+          value={qualityDisabled ? 'auto' : isFalProvider && params.quality === 'auto' ? 'high' : params.quality}
           onChange={(val) => {
-            if (!activeProfile.codexCli) setParams({ quality: val as TaskParams['quality'] })
+            if (!qualityDisabled) setParams({ quality: val as TaskParams['quality'] })
           }}
           options={qualityOptions}
-          disabled={activeProfile.codexCli}
-          className={activeProfile.codexCli
+          disabled={qualityDisabled}
+          className={qualityDisabled
             ? 'px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-gray-100/50 dark:bg-white/[0.05] opacity-50 cursor-not-allowed text-xs transition-all duration-200 shadow-sm'
             : selectClass}
         />
         <ButtonTooltip
-          visible={(activeProfile.codexCli || isFalProvider) && qualityHint.visible}
-          text={isFalProvider ? <>fal.ai 不支持 <code className="rounded bg-white/10 px-1 py-0.5 font-mono">auto</code> 质量参数</> : 'Codex CLI 不支持质量参数'}
+          visible={(qualityDisabled || isFalProvider) && qualityHint.visible}
+          text={activeProfile.codexCli
+            ? 'Codex CLI 不支持质量参数'
+            : !activeProfile.model.toLowerCase().includes('gpt')
+              ? '仅 GPT 图像模型支持选择思考程度'
+              : <>fal.ai 不支持 <code className="rounded bg-white/10 px-1 py-0.5 font-mono">auto</code> 质量参数</>}
         />
       </label>
       <label className="flex flex-col gap-0.5">

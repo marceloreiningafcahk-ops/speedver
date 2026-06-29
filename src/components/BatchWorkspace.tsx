@@ -89,25 +89,22 @@ export default function BatchWorkspace() {
     () => settings.profiles.map((profile) => ({ label: profile.name, value: profile.id })),
     [settings.profiles],
   )
+  const qualityDisabled = !currentProfile?.model.toLowerCase().includes('gpt')
   const selectClass = 'px-3 py-2 rounded-lg border border-gray-200 bg-white text-sm transition shadow-sm dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-gray-100'
+  const disabledSelectClass = 'px-3 py-2 rounded-lg border border-gray-200 bg-gray-100 text-sm opacity-50 cursor-not-allowed transition shadow-sm dark:border-white/[0.08] dark:bg-white/[0.05] dark:text-gray-100'
   const fieldClass = 'w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm outline-none transition focus:border-blue-400 dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-gray-100'
 
   const setBatchParam = (patch: Partial<TaskParams>) => {
     setBatchParams((current) => ({ ...current, ...patch }))
   }
 
+  useEffect(() => {
+    if (qualityDisabled && batchParams.quality !== 'auto') setBatchParam({ quality: 'auto' })
+  }, [batchParams.quality, qualityDisabled])
+
   const handleSwitchProfile = (profileId: string) => {
     if (profileId === settings.activeProfileId) return
     setSettings({ activeProfileId: profileId })
-  }
-
-  const handleModelChange = (model: string) => {
-    if (!currentProfile) return
-    setSettings({
-      profiles: settings.profiles.map((profile) =>
-        profile.id === currentProfile.id ? { ...profile, model } : profile,
-      ),
-    })
   }
 
   const removeImage = async (image: InputImage, onAfter: () => void) => {
@@ -279,14 +276,6 @@ export default function BatchWorkspace() {
                   className={selectClass}
                 />
               </label>
-              <label className="col-span-2">
-                <span className="mb-1 block text-gray-500 dark:text-gray-400">模型 ID</span>
-                <input
-                  value={currentProfile?.model ?? ''}
-                  onChange={(e) => handleModelChange(e.target.value)}
-                  className={`${fieldClass} font-mono`}
-                />
-              </label>
               <label>
                 <span className="mb-1 block text-gray-500 dark:text-gray-400">尺寸</span>
                 <button
@@ -309,17 +298,20 @@ export default function BatchWorkspace() {
                 />
               </label>
               <label>
-                <span className="mb-1 block text-gray-500 dark:text-gray-400">质量</span>
+                <span className="mb-1 block text-gray-500 dark:text-gray-400">思考程度</span>
                 <Select
-                  value={batchParams.quality}
-                  onChange={(value) => setBatchParam({ quality: value as TaskParams['quality'] })}
+                  value={qualityDisabled ? 'auto' : batchParams.quality}
+                  onChange={(value) => {
+                    if (!qualityDisabled) setBatchParam({ quality: value as TaskParams['quality'] })
+                  }}
                   options={[
                     { label: 'auto', value: 'auto' },
                     { label: 'low', value: 'low' },
                     { label: 'medium', value: 'medium' },
                     { label: 'high', value: 'high' },
                   ]}
-                  className={selectClass}
+                  disabled={qualityDisabled}
+                  className={qualityDisabled ? disabledSelectClass : selectClass}
                 />
               </label>
               <label>
@@ -395,6 +387,10 @@ export default function BatchWorkspace() {
                     className="mb-3 w-full resize-none rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm outline-none transition focus:border-blue-400 dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-gray-100"
                   />
                   <div className="mb-3 grid grid-cols-3 gap-2">
+                    <div className="flex h-16 w-16 flex-col items-center justify-center rounded-lg border border-dashed border-blue-300 bg-blue-50/70 text-[10px] font-medium text-blue-600 dark:border-blue-400/40 dark:bg-blue-500/10 dark:text-blue-200">
+                      <span>图一</span>
+                      <span>{commonImages.length ? `通用参考 x${commonImages.length}` : '通用参考'}</span>
+                    </div>
                     {task.images.map((image) => (
                       <ImageThumb
                         key={image.id}
