@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { createInputImageFromFile, deleteImageIfUnreferenced, submitBatchTasks, useStore, type BatchSubmitTaskInput } from '../store'
+import { createInputImageFromFile, deleteImageIfUnreferenced, submitBatchTasks, useStore } from '../store'
 import type { InputImage, TaskParams } from '../types'
 import { getOutputImageLimitForSettings } from '../lib/paramCompatibility'
 import { CloseIcon, PlusIcon, TrashIcon } from './icons'
@@ -10,7 +10,6 @@ interface BatchDraftTask {
   id: string
   prompt: string
   images: InputImage[]
-  fileName: string
 }
 
 const REFERENCE_IMAGE_LABELS = ['图一', '图二', '图三', '图四', '图五', '图六', '图七', '图八', '图九']
@@ -21,10 +20,6 @@ function newDraftId() {
 
 function getReferenceImageLabel(index: number) {
   return REFERENCE_IMAGE_LABELS[index] ?? `图${index + 1}`
-}
-
-function getFileNameBase(file: File) {
-  return file.name.replace(/\.[^.]+$/, '').trim()
 }
 
 function getImageFiles(files: FileList | File[]) {
@@ -40,13 +35,11 @@ async function filesToInputImages(files: FileList | File[]) {
   return images
 }
 
-function filesToDraftTasks(files: FileList | File[], images: InputImage[]): BatchDraftTask[] {
-  const imageFiles = getImageFiles(files)
-  return images.map((image, index) => ({
+function imagesToDraftTasks(images: InputImage[]): BatchDraftTask[] {
+  return images.map((image) => ({
     id: newDraftId(),
     prompt: '',
     images: [image],
-    fileName: getFileNameBase(imageFiles[index]),
   }))
 }
 
@@ -80,7 +73,7 @@ export default function BatchWorkspace() {
   const [dragActive, setDragActive] = useState(false)
   const pasteTargetRef = useRef<'common' | 'tasks'>('tasks')
   const [draftTasks, setDraftTasks] = useState<BatchDraftTask[]>([
-    { id: newDraftId(), prompt: '', images: [], fileName: '' },
+    { id: newDraftId(), prompt: '', images: [] },
   ])
 
   const latestBatchTasks = useMemo(() => (
@@ -129,7 +122,7 @@ export default function BatchWorkspace() {
 
   const removeTask = async (id: string) => {
     const task = draftTasks.find((item) => item.id === id)
-    setDraftTasks((items) => items.length === 1 ? [{ id: newDraftId(), prompt: '', images: [], fileName: '' }] : items.filter((item) => item.id !== id))
+    setDraftTasks((items) => items.length === 1 ? [{ id: newDraftId(), prompt: '', images: [] }] : items.filter((item) => item.id !== id))
     if (task) {
       for (const image of task.images) await deleteImageIfUnreferenced(image.id)
     }
@@ -155,9 +148,9 @@ export default function BatchWorkspace() {
     if (!files?.length) return
     const images = await filesToInputImages(files)
     if (!images.length) return
-    const nextTasks = filesToDraftTasks(files, images)
+    const nextTasks = imagesToDraftTasks(images)
     setDraftTasks((items) => {
-      const hasOnlyEmptyTask = items.length === 1 && !items[0].prompt.trim() && !items[0].images.length && !items[0].fileName.trim()
+      const hasOnlyEmptyTask = items.length === 1 && !items[0].prompt.trim() && !items[0].images.length
       return hasOnlyEmptyTask ? nextTasks : [...items, ...nextTasks]
     })
   }
@@ -188,10 +181,9 @@ export default function BatchWorkspace() {
   }
 
   const handleSubmit = async () => {
-    const tasks: BatchSubmitTaskInput[] = draftTasks.map((task) => ({
+    const tasks = draftTasks.map((task) => ({
       prompt: task.prompt,
       images: task.images,
-      fileName: task.fileName,
     }))
     setSubmitting(true)
     try {
@@ -434,12 +426,6 @@ export default function BatchWorkspace() {
                       <input type="file" accept="image/*" multiple className="hidden" onChange={(e) => void handleTaskImageFiles(task.id, e.target.files)} />
                     </label>
                   </div>
-                  <input
-                    value={task.fileName}
-                    onChange={(e) => updateTask(task.id, { fileName: e.target.value })}
-                    placeholder="导出文件名，可选"
-                    className="mt-auto w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs outline-none transition focus:border-blue-400 dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-gray-100"
-                  />
                 </div>
               ))}
             </div>

@@ -243,8 +243,6 @@ export interface TaskRecord {
   batchIndex?: number
   /** 批量任务组总任务数 */
   batchTotal?: number
-  /** 批量导出时建议使用的文件名 */
-  batchFileName?: string
   /** Agent 对话 ID */
   agentConversationId?: string
   /** Agent 轮次 ID */

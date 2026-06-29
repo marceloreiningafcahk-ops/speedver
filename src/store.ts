@@ -99,7 +99,6 @@ type AgentInputDraft = {
 export interface BatchSubmitTaskInput {
   prompt?: string
   images: InputImage[]
-  fileName?: string
 }
 
 export interface BatchSubmitOptions {
@@ -2638,7 +2637,6 @@ export async function submitBatchTasks(options: BatchSubmitOptions) {
       index,
       prompt: mergeBatchPrompt(options.commonPrompt, task.prompt),
       images: getUniqueBatchImages(commonImages, task.images),
-      fileName: task.fileName?.trim(),
     }))
     .filter((task) => task.prompt || task.images.length > 0)
 
@@ -2694,7 +2692,6 @@ export async function submitBatchTasks(options: BatchSubmitOptions) {
       batchName,
       batchIndex: index + 1,
       batchTotal: normalizedInputs.length,
-      batchFileName: item.fileName,
     }
     tasks.push(task)
   }
