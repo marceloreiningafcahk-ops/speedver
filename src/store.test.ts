@@ -131,7 +131,7 @@ import { clearAgentConversations, clearImages, clearTasks, getAllAgentConversati
 import { callAgentResponsesApi, callBatchImageSingle } from './lib/agentApi'
 import { getFalQueuedImageResult } from './lib/falAiImageApi'
 import { removeKeyedBackgroundFromDataUrl } from './lib/transparentImage'
-import { cleanStaleAgentInputDrafts, clearFailedTasks, deleteAgentRoundFromConversation, deleteFavoriteCollection, editOutputs, getActiveAgentRounds, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, markInterruptedOpenAIRunningTasks, migratePersistedState, regenerateAgentAssistantMessage, remapAgentRoundMentionsForPathChange, removeTask, reuseConfig, submitAgentMessage, submitTask, taskMatchesFilterSourceMode, taskMatchesFilterStatus, taskMatchesSearchQuery, useStore } from './store'
+import { cleanStaleAgentInputDrafts, clearFailedTasks, deleteAgentRoundFromConversation, deleteFavoriteCollection, editOutputs, getActiveAgentRounds, getErrorToastMessage, getPersistedState, getTaskApiProfile, getTemplateApplyUploadPlan, getTemplateReplaceImageIndexes, importData, initStore, markInterruptedOpenAIRunningTasks, migratePersistedState, regenerateAgentAssistantMessage, remapAgentRoundMentionsForPathChange, removeTask, reuseConfig, submitAgentMessage, submitTask, taskMatchesFilterSourceMode, taskMatchesFilterStatus, taskMatchesSearchQuery, useStore } from './store'
 
 const imageA = { id: 'image-a', dataUrl: 'data:image/png;base64,a' }
 const imageB = { id: 'image-b', dataUrl: 'data:image/png;base64,b' }
@@ -1760,6 +1760,24 @@ describe('agent context for removed outputs', () => {
     expect(taskMatchesFilterSourceMode(task({ id: 'template-task', sourceTemplateId: 'template-1' }), 'template')).toBe(true)
     expect(taskMatchesFilterSourceMode(task({ id: 'agent-task', agentRoundId: 'round-1' }), 'agent')).toBe(true)
     expect(taskMatchesFilterSourceMode(task({ id: 'explicit-batch-task', sourceMode: 'batch' }), 'gallery')).toBe(false)
+  })
+
+  it('normalizes template replace image indexes with legacy fallback', () => {
+    const legacy = task({ inputImageIds: ['a', 'b', 'c'], templateReplaceImageIndex: 1 })
+    const multi = task({ inputImageIds: ['a', 'b', 'c'], templateReplaceImageIndex: 2, templateReplaceImageIndexes: [2, 0, 2, 8, -1] })
+
+    expect(getTemplateReplaceImageIndexes(legacy)).toEqual([1])
+    expect(getTemplateReplaceImageIndexes(multi)).toEqual([0, 2])
+  })
+
+  it('plans template apply upload slots for mixed single and multi templates', () => {
+    const single = task({ inputImageIds: ['a', 'b'], templateReplaceImageIndex: 1 })
+    const double = task({ inputImageIds: ['a', 'b', 'c'], templateReplaceImageIndexes: [0, 2] })
+    const triple = task({ inputImageIds: ['a', 'b', 'c'], templateReplaceImageIndexes: [0, 1, 2] })
+
+    expect(getTemplateApplyUploadPlan([single])).toEqual({ selectedCount: 1, hasSingleSlot: true, maxMultiSlots: 0 })
+    expect(getTemplateApplyUploadPlan([double])).toEqual({ selectedCount: 1, hasSingleSlot: false, maxMultiSlots: 2 })
+    expect(getTemplateApplyUploadPlan([single, double, triple])).toEqual({ selectedCount: 3, hasSingleSlot: true, maxMultiSlots: 3 })
   })
 
   it('clears partial failure markers without deleting successful outputs', async () => {

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { TaskRecord } from '../types'
-import { useStore, ensureImageThumbnailCached, subscribeImageThumbnail, updateTaskInStore, removeTask, renameTemplateCollection, removeTemplateCollection, getTemplateCollections, moveTemplatesToCollection, reuseConfig } from '../store'
+import { useStore, ensureImageThumbnailCached, subscribeImageThumbnail, updateTaskInStore, removeTask, renameTemplateCollection, removeTemplateCollection, getTemplateCollections, moveTemplatesToCollection, reuseConfig, getTemplateReplaceImageIndexes } from '../store'
 import { TemplateIcon, TagIcon, TrashIcon, ChevronDownIcon } from './icons'
 import TemplateApplyModal from './TemplateApplyModal'
 
@@ -69,14 +69,14 @@ function TemplateCard({ template, suppressClickUntil }: { template: TaskRecord; 
   const [colorDraft, setColorDraft] = useState('')
   const [coverDraft, setCoverDraft] = useState<string | null>(null)
   const [promptDraft, setPromptDraft] = useState('')
-  const [replaceIndexDraft, setReplaceIndexDraft] = useState(0)
+  const [replaceIndexDrafts, setReplaceIndexDrafts] = useState<number[]>([0])
 
   const startEdit = () => {
     setNameDraft(template.customName ?? '')
     setColorDraft(template.customColor ?? '')
     setCoverDraft(template.templateCoverImageId ?? template.inputImageIds[0] ?? null)
     setPromptDraft(template.prompt ?? '')
-    setReplaceIndexDraft(template.templateReplaceImageIndex ?? 0)
+    setReplaceIndexDrafts(getTemplateReplaceImageIndexes(template))
     setEditing(true)
   }
   const commitEdit = () => {
@@ -90,12 +90,20 @@ function TemplateCard({ template, suppressClickUntil }: { template: TaskRecord; 
       customColor: colorDraft.trim() || undefined,
       templateCoverImageId: coverDraft ?? undefined,
       prompt: nextPrompt,
-      templateReplaceImageIndex: replaceIndexDraft,
+      templateReplaceImageIndex: replaceIndexDrafts[0] ?? 0,
+      templateReplaceImageIndexes: replaceIndexDrafts,
     })
     setEditing(false)
   }
 
   // 把模板的提示词 / 参考图 / 参数复用到生图模式（画廊）输入区
+  const toggleReplaceIndexDraft = (idx: number) => {
+    setReplaceIndexDrafts((current) => {
+      if (current.includes(idx)) return current.length > 1 ? current.filter((item) => item !== idx) : current
+      return [...current, idx].sort((a, b) => a - b)
+    })
+  }
+
   const reuseToGallery = () => {
     setAppMode('gallery')
     void reuseConfig(template)
@@ -149,7 +157,7 @@ function TemplateCard({ template, suppressClickUntil }: { template: TaskRecord; 
                 <p className="mb-1 text-[10px] text-gray-400 dark:text-gray-500">可替换图位（套用时替换这张）</p>
                 <div className="flex flex-wrap gap-1">
                   {template.inputImageIds.map((imgId, idx) => (
-                    <CoverChoice key={imgId} imageId={imgId} index={idx} active={replaceIndexDraft === idx} onClick={() => setReplaceIndexDraft(idx)} />
+                    <CoverChoice key={imgId} imageId={imgId} index={idx} active={replaceIndexDrafts.includes(idx)} onClick={() => toggleReplaceIndexDraft(idx)} />
                   ))}
                 </div>
               </div>
@@ -508,7 +516,7 @@ export default function TemplateWorkspace() {
   }, [clearSelection, setSelectedTemplateIds, isMac])
 
   return (
-    <main className="pb-48">
+    <main className="pb-48" data-tour="template-workspace">
       <div className="safe-area-x max-w-7xl mx-auto px-1" data-template-grid-surface>
         {totalTemplates === 0 ? (
           <div className="flex flex-col items-center justify-center gap-3 py-32 text-center text-gray-400 dark:text-gray-500">
@@ -607,7 +615,7 @@ export default function TemplateWorkspace() {
             <span className="text-sm text-gray-600 dark:text-gray-300">已选 {selectedIds.length} 个模板</span>
             <button onClick={clearSelection} className="rounded-full px-3 py-1.5 text-sm text-gray-500 transition hover:bg-gray-100 dark:hover:bg-white/[0.06]">取消</button>
             <MoveToGroupMenu selectedIds={selectedIds} onDone={clearSelection} />
-            <button onClick={() => setShowApply(true)} className="rounded-full bg-blue-500 px-4 py-1.5 text-sm font-medium text-white transition hover:bg-blue-600">批量套用</button>
+            <button data-tour="template-apply-button" onClick={() => setShowApply(true)} className="rounded-full bg-blue-500 px-4 py-1.5 text-sm font-medium text-white transition hover:bg-blue-600">批量套用</button>
           </div>
         </div>
       )}

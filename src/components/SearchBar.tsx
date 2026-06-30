@@ -146,6 +146,10 @@ export default function SearchBar() {
     clearSelection()
   }
 
+  useEffect(() => {
+    if (filterSourceMode === 'agent') setFilterSourceMode('all')
+  }, [filterSourceMode, setFilterSourceMode])
+
   return (
     <div ref={rootRef} data-no-drag-select className="mt-6 mb-4 flex gap-3">
       <div className="flex gap-2 flex-shrink-0 z-20">
@@ -217,7 +221,6 @@ export default function SearchBar() {
                   { label: '生图模式', value: 'gallery' },
                   { label: '模板模式', value: 'template' },
                   { label: '批量模式', value: 'batch' },
-                  { label: 'Agent', value: 'agent' },
                 ]}
                 className="px-3 py-2.5 rounded-xl border border-gray-200 dark:border-white/[0.08] bg-white dark:bg-gray-900 hover:bg-gray-50 dark:hover:bg-white/[0.06] text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400 transition"
               />

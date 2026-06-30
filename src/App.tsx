@@ -17,6 +17,7 @@ import InputBar from './components/InputBar'
 import DetailModal from './components/DetailModal'
 import Lightbox from './components/Lightbox'
 import SettingsModal from './components/SettingsModal'
+import TutorialModal, { shouldOpenTutorialForMode } from './components/TutorialModal'
 import ConfirmDialog from './components/ConfirmDialog'
 import Toast from './components/Toast'
 import MaskEditorModal from './components/MaskEditorModal'
@@ -32,6 +33,10 @@ export default function App() {
   const filterFavorite = useStore((s) => s.filterFavorite)
   const activeFavoriteCollectionId = useStore((s) => s.activeFavoriteCollectionId)
   const showSaveTemplateModal = useStore((s) => s.showSaveTemplateModal)
+  const onboardingApiConfigReady = useStore((s) => s.onboardingApiConfigReady)
+  const tutorialTopic = useStore((s) => s.tutorialTopic)
+  const tutorialSeenModes = useStore((s) => s.tutorialSeenModes)
+  const openTutorial = useStore((s) => s.openTutorial)
   useDockerApiUrlMigrationNotice()
   useGlobalClickSuppression()
 
@@ -100,6 +105,18 @@ export default function App() {
   }, [setSettings])
 
   useEffect(() => {
+    if (tutorialTopic) return
+
+    if (!onboardingApiConfigReady) {
+      openTutorial('api')
+      return
+    }
+
+    const nextTopic = shouldOpenTutorialForMode(appMode, tutorialSeenModes)
+    if (nextTopic) openTutorial(nextTopic)
+  }, [appMode, onboardingApiConfigReady, openTutorial, tutorialSeenModes, tutorialTopic])
+
+  useEffect(() => {
     const preventPageImageDrag = (e: DragEvent) => {
       if ((e.target as HTMLElement | null)?.closest('img')) {
         e.preventDefault()
@@ -132,6 +149,7 @@ export default function App() {
       <DetailModal />
       <Lightbox />
       <SettingsModal />
+      <TutorialModal />
       <ConfirmDialog />
       <FavoriteCollectionPickerModal />
       <ManageCollectionsModal />

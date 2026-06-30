@@ -135,6 +135,9 @@ function isErrorToastTitle(title: string): boolean {
 }
 
 export type SettingsTab = 'general' | 'template' | 'api' | 'data' | 'about'
+export type TutorialTopic = 'api' | 'gallery' | 'batch' | 'template'
+
+export const CURRENT_TUTORIAL_VERSION = 2
 
 const TIMEOUT_STREAMING_HINT = '也可尝试打开「流式传输」，并提高「请求中间步骤图像数」来维持连接。'
 const TIMEOUT_PARTIAL_IMAGES_ZERO_HINT = '官方流式接口不发送心跳，当前「请求中间步骤图像数」为 0，连接可能因无数据传输而断开。建议提高到 2 或 3。'
@@ -711,6 +714,8 @@ export function getPersistedState(state: AppState) {
     supportPromptDismissed: state.supportPromptDismissed,
     supportPromptOpen: state.supportPromptOpen,
     supportPromptSkippedForImportedData: state.supportPromptSkippedForImportedData,
+    onboardingApiConfigReady: state.onboardingApiConfigReady,
+    tutorialSeenModes: state.tutorialSeenModes,
   }
 }
 
@@ -790,6 +795,14 @@ function mergePersistedState(persistedState: unknown, currentState: AppState): A
     supportPromptDismissed: Boolean(persisted.supportPromptDismissed),
     supportPromptOpen: Boolean(persisted.supportPromptOpen),
     supportPromptSkippedForImportedData: Boolean(persisted.supportPromptSkippedForImportedData),
+    onboardingApiConfigReady: Boolean(persisted.onboardingApiConfigReady)
+      && typeof persisted.tutorialSeenModes === 'object'
+      && persisted.tutorialSeenModes !== null
+      && !Array.isArray(persisted.tutorialSeenModes)
+      && ((persisted.tutorialSeenModes as Partial<Record<TutorialTopic, number>>).api ?? 0) >= CURRENT_TUTORIAL_VERSION,
+    tutorialSeenModes: typeof persisted.tutorialSeenModes === 'object' && persisted.tutorialSeenModes && !Array.isArray(persisted.tutorialSeenModes)
+      ? persisted.tutorialSeenModes
+      : {},
     prompt: restoredAgentDraft ? restoredAgentDraft.prompt : galleryInputDraft?.prompt ?? '',
     inputImages: restoredAgentDraft ? restoredAgentDraft.inputImages : galleryInputDraft?.inputImages ?? [],
     maskDraft: restoredAgentDraft ? restoredAgentDraft.maskDraft : galleryInputDraft?.maskDraft ?? null,
@@ -931,6 +944,13 @@ interface AppState {
   supportPromptSkippedForImportedData: boolean
   setSupportPromptOpen: (v: boolean) => void
   dismissSupportPrompt: () => void
+  onboardingApiConfigReady: boolean
+  setOnboardingApiConfigReady: (ready: boolean) => void
+  tutorialTopic: TutorialTopic | null
+  tutorialSeenModes: Partial<Record<TutorialTopic, number>>
+  openTutorial: (topic: TutorialTopic) => void
+  closeTutorial: (options?: { markSeen?: boolean }) => void
+  markTutorialSeen: (topic: TutorialTopic) => void
 
   // Toast
   toast: { message: string; type: ToastType } | null
@@ -1672,6 +1692,31 @@ export const useStore = create<AppState>()(
       supportPromptSkippedForImportedData: false,
       setSupportPromptOpen: (supportPromptOpen) => set({ supportPromptOpen }),
       dismissSupportPrompt: () => set({ supportPromptOpen: false, supportPromptDismissed: true }),
+      onboardingApiConfigReady: false,
+      setOnboardingApiConfigReady: (onboardingApiConfigReady) => set({ onboardingApiConfigReady }),
+      tutorialTopic: null,
+      tutorialSeenModes: {},
+      openTutorial: (tutorialTopic) => {
+        dismissAllTooltips()
+        set({ tutorialTopic })
+      },
+      closeTutorial: (options) => set((state) => ({
+        tutorialTopic: null,
+        ...(options?.markSeen && state.tutorialTopic
+          ? {
+              tutorialSeenModes: {
+                ...state.tutorialSeenModes,
+                [state.tutorialTopic]: CURRENT_TUTORIAL_VERSION,
+              },
+            }
+          : {}),
+      })),
+      markTutorialSeen: (topic) => set((state) => ({
+        tutorialSeenModes: {
+          ...state.tutorialSeenModes,
+          [topic]: CURRENT_TUTORIAL_VERSION,
+        },
+      })),
 
       // Toast
       toast: null,
@@ -1865,6 +1910,26 @@ export function getTaskSourceMode(task: TaskRecord): AppState['filterSourceMode'
 export function taskMatchesFilterSourceMode(task: TaskRecord, filterSourceMode: AppState['filterSourceMode']) {
   if (filterSourceMode === 'all') return true
   return getTaskSourceMode(task) === filterSourceMode
+}
+
+export function getTemplateReplaceImageIndexes(template: Pick<TaskRecord, 'inputImageIds' | 'templateReplaceImageIndex' | 'templateReplaceImageIndexes'>): number[] {
+  const max = template.inputImageIds.length
+  const sourceIndexes = Array.isArray(template.templateReplaceImageIndexes) && template.templateReplaceImageIndexes.length
+    ? template.templateReplaceImageIndexes
+    : [template.templateReplaceImageIndex ?? max - 1]
+  const indexes = sourceIndexes
+    .map((index) => Math.trunc(Number(index)))
+    .filter((index) => Number.isFinite(index) && index >= 0 && index < max)
+  return Array.from(new Set(indexes)).sort((a, b) => a - b)
+}
+
+export function getTemplateApplyUploadPlan(templates: Array<Pick<TaskRecord, 'inputImageIds' | 'templateReplaceImageIndex' | 'templateReplaceImageIndexes'>>) {
+  const counts = templates.map((template) => Math.max(1, getTemplateReplaceImageIndexes(template).length))
+  return {
+    selectedCount: templates.length,
+    hasSingleSlot: counts.some((count) => count === 1),
+    maxMultiSlots: counts.filter((count) => count > 1).reduce((max, count) => Math.max(max, count), 0),
+  }
 }
 
 /** 按生成日期筛选：today=当天，week=最近7天，month=最近30天，specific=指定区间(start~end，YYYY-MM-DD) */
@@ -2726,6 +2791,7 @@ export async function submitBatchTasks(options: BatchSubmitOptions) {
  */
 export async function saveCurrentInputAsTemplate(opts: {
   replaceableIndex: number
+  replaceableIndexes?: number[]
   coverIndex?: number
   name?: string
   color?: string
@@ -2757,11 +2823,18 @@ export async function saveCurrentInputAsTemplate(opts: {
   const name = opts.name?.trim()
   const color = opts.color?.trim()
   const collectionIds = normalizeFavoriteCollectionIds(opts.collectionIds ?? [])
-  const replaceableImageId = inputImages[opts.replaceableIndex]?.id ?? null
+  const replaceableIndexes = Array.from(new Set([
+    ...(Array.isArray(opts.replaceableIndexes) ? opts.replaceableIndexes : []),
+    opts.replaceableIndex,
+  ]
+    .map((index) => Math.trunc(Number(index)))
+    .filter((index) => Number.isFinite(index) && index >= 0 && index < inputImages.length),
+  )).sort((a, b) => a - b)
+  const replaceableImageId = inputImages[replaceableIndexes[0]]?.id ?? null
   // 封面：用户可从参考图里另选一张；未指定或越界时回退到可替换图位
   const coverIndex = opts.coverIndex != null && opts.coverIndex >= 0 && opts.coverIndex < inputImages.length
     ? opts.coverIndex
-    : opts.replaceableIndex
+    : replaceableIndexes[0]
   const coverImageId = inputImages[coverIndex]?.id ?? replaceableImageId
   const template: TaskRecord = {
     id: genId(),
@@ -2769,7 +2842,8 @@ export async function saveCurrentInputAsTemplate(opts: {
     prompt: trimmedPrompt,
     params: { ...params },
     inputImageIds: inputImages.map((i) => i.id),
-    templateReplaceImageIndex: opts.replaceableIndex,
+    templateReplaceImageIndex: replaceableIndexes[0],
+    templateReplaceImageIndexes: replaceableIndexes,
     templateCoverImageId: coverImageId,
     templateCollectionId: opts.templateCollectionId || null,
     templateCollectionName: opts.templateCollectionId ? (opts.templateCollectionName?.trim() || undefined) : undefined,
@@ -2796,7 +2870,12 @@ export async function saveCurrentInputAsTemplate(opts: {
  * 保留固定参考图、只替换 templateReplaceImageIndex 图位（保持顺序，@图N 不错乱），
  * 复用 createAndExecuteTaskFromInput 创建普通生成任务。
  */
-export async function batchApplyTemplates(productImageDataUrl: string): Promise<boolean> {
+export interface TemplateApplyImages {
+  singleImageDataUrl?: string
+  multiImageDataUrls?: string[]
+}
+
+export async function batchApplyTemplates(productImageDataUrlOrImages: string | TemplateApplyImages): Promise<boolean> {
   const state = useStore.getState()
   const { settings, tasks, selectedTemplateIds, showToast } = state
   const templates = selectedTemplateIds
@@ -2817,18 +2896,41 @@ export async function batchApplyTemplates(productImageDataUrl: string): Promise<
   const requestSettings = createSettingsForApiProfile(normalizedSettings, activeProfile)
 
   // 存储上传的产品图，得到去重后的 image id
-  const productImageId = await storeImage(productImageDataUrl)
-  cacheImage(productImageId, productImageDataUrl)
+  const applyImages: TemplateApplyImages = typeof productImageDataUrlOrImages === 'string'
+    ? { singleImageDataUrl: productImageDataUrlOrImages, multiImageDataUrls: [productImageDataUrlOrImages] }
+    : productImageDataUrlOrImages
+  const singleImageDataUrl = applyImages.singleImageDataUrl || applyImages.multiImageDataUrls?.[0] || ''
+  const multiImageDataUrls = applyImages.multiImageDataUrls ?? (singleImageDataUrl ? [singleImageDataUrl] : [])
+  const imageIdByDataUrl = new Map<string, string>()
+  const getReplacementImage = async (dataUrl: string): Promise<InputImage> => {
+    let id = imageIdByDataUrl.get(dataUrl)
+    if (!id) {
+      id = await storeImage(dataUrl)
+      cacheImage(id, dataUrl)
+      imageIdByDataUrl.set(dataUrl, id)
+    }
+    return { id, dataUrl }
+  }
 
   let created = 0
   for (const template of templates) {
     // 读取模板每张参考图的 dataUrl，并在替换图位换成产品图
-    const replaceIndex = template.templateReplaceImageIndex ?? template.inputImageIds.length - 1
+    const replaceIndexes = getTemplateReplaceImageIndexes(template)
+    const replacementImages = replaceIndexes.length > 1
+      ? await Promise.all(multiImageDataUrls.slice(0, replaceIndexes.length).map((dataUrl) => getReplacementImage(dataUrl)))
+      : singleImageDataUrl
+      ? [await getReplacementImage(singleImageDataUrl)]
+      : []
+    if (replacementImages.length < replaceIndexes.length) {
+      showToast('模板替换图不足，已跳过一个模板', 'error')
+      continue
+    }
     const inputImages: InputImage[] = []
     let missing = false
     for (let i = 0; i < template.inputImageIds.length; i++) {
-      if (i === replaceIndex) {
-        inputImages.push({ id: productImageId, dataUrl: productImageDataUrl })
+      const replacementSlot = replaceIndexes.indexOf(i)
+      if (replacementSlot >= 0) {
+        inputImages.push(replacementImages[replacementSlot])
         continue
       }
       const id = template.inputImageIds[i]

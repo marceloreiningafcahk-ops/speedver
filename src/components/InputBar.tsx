@@ -1930,7 +1930,7 @@ export default function InputBar() {
         />
       )}
 
-      <div data-input-bar className="fixed bottom-4 sm:bottom-6 left-1/2 -translate-x-1/2 z-30 w-full max-w-4xl px-3 sm:px-4 transition-all duration-300">
+      <div data-input-bar data-tour="gallery-input-bar" className="fixed bottom-4 sm:bottom-6 left-1/2 -translate-x-1/2 z-30 w-full max-w-4xl px-3 sm:px-4 transition-all duration-300">
         <InputBatchBars
           showFavoriteCollectionBatchBar={showFavoriteCollectionBatchBar}
           showTaskBatchBar={showTaskBatchBar}
@@ -2015,6 +2015,7 @@ export default function InputBar() {
             )}
             <div
               ref={textareaRef}
+              data-tour="gallery-prompt"
               contentEditable
               suppressContentEditableWarning
               onInput={(e) => {
@@ -2090,6 +2091,7 @@ export default function InputBar() {
               <div className="flex gap-2 flex-shrink-0 mb-0.5">
                 {appMode === 'gallery' && (
                   <button
+                    data-tour="template-save-button"
                     onClick={handleOpenSaveTemplate}
                     className="p-2.5 rounded-xl transition-all shadow-sm bg-gray-200 dark:bg-white/[0.06] hover:bg-gray-300 dark:hover:bg-white/[0.1] text-gray-500 dark:text-gray-300 hover:shadow"
                     aria-label="保存为模板"
@@ -2105,6 +2107,7 @@ export default function InputBar() {
                 >
                   <ButtonTooltip visible={attachHover} text={uploadImageTooltipText} />
                   <button
+                    data-tour="gallery-upload"
                     onClick={() => !atImageLimit && fileInputRef.current?.click()}
                     className={`p-2.5 rounded-xl transition-all shadow-sm ${
                       atImageLimit
@@ -2125,6 +2128,7 @@ export default function InputBar() {
                 >
                   <ButtonTooltip visible={(activeAgentIsRunning || !hasSubmitApiConfig) && submitHover} text={submitTooltipText} />
                   <button
+                    data-tour="gallery-submit"
                     onClick={() => activeAgentIsRunning ? stopActiveAgentResponse() : hasSubmitApiConfig ? submitCurrentMode() : setShowSettings(true)}
                     disabled={activeAgentIsRunning ? false : hasSubmitApiConfig ? !canSubmit : false}
                     className={`p-2.5 rounded-xl transition-all shadow-sm hover:shadow ${

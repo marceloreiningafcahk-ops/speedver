@@ -229,6 +229,7 @@ export default function BatchWorkspace() {
 
       <div className="grid gap-4 lg:grid-cols-[360px_1fr]">
         <section
+          data-tour="batch-common-settings"
           className="space-y-4"
           onMouseEnter={() => markPasteTarget('common')}
           onPointerDown={() => markPasteTarget('common')}
@@ -255,7 +256,7 @@ export default function BatchWorkspace() {
                 {commonImages.map((image) => (
                   <ImageThumb key={image.id} image={image} onRemove={() => void removeImage(image, () => setCommonImages((items) => items.filter((item) => item.id !== image.id)))} />
                 ))}
-                <label className="flex h-16 w-16 cursor-pointer items-center justify-center rounded-lg border border-dashed border-gray-300 text-gray-400 transition hover:bg-gray-50 dark:border-white/[0.12] dark:hover:bg-white/[0.04]">
+                <label data-tour="batch-common-upload" className="flex h-16 w-16 cursor-pointer items-center justify-center rounded-lg border border-dashed border-gray-300 text-gray-400 transition hover:bg-gray-50 dark:border-white/[0.12] dark:hover:bg-white/[0.04]">
                   <PlusIcon className="h-5 w-5" />
                   <input type="file" accept="image/*" multiple className="hidden" onChange={(e) => void handleCommonImageFiles(e.target.files)} />
                 </label>
@@ -355,6 +356,7 @@ export default function BatchWorkspace() {
         </section>
 
         <section
+          data-tour="batch-task-list"
           className="space-y-4"
           onMouseEnter={() => markPasteTarget('tasks')}
           onPointerDown={() => markPasteTarget('tasks')}
@@ -366,19 +368,19 @@ export default function BatchWorkspace() {
                 <h3 className="text-sm font-semibold text-gray-800 dark:text-gray-100">任务列表</h3>
                 <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">{readyTaskCount} 个可提交任务</p>
               </div>
-              <label className="cursor-pointer rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-600 transition hover:bg-gray-50 dark:border-white/[0.08] dark:text-gray-300 dark:hover:bg-white/[0.04]">
+              <label data-tour="batch-split-upload" className="cursor-pointer rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-600 transition hover:bg-gray-50 dark:border-white/[0.08] dark:text-gray-300 dark:hover:bg-white/[0.04]">
                 多任务拆图
                 <input type="file" accept="image/*" multiple className="hidden" onChange={(e) => void appendImageTasks(e.target.files)} />
               </label>
             </div>
 
-            <div className="mb-4 rounded-lg border border-dashed border-gray-300 bg-gray-50 px-4 py-5 text-center text-sm text-gray-500 dark:border-white/[0.12] dark:bg-white/[0.03] dark:text-gray-400">
+            <div data-tour="batch-dropzone" className="mb-4 rounded-lg border border-dashed border-gray-300 bg-gray-50 px-4 py-5 text-center text-sm text-gray-500 dark:border-white/[0.12] dark:bg-white/[0.03] dark:text-gray-400">
               拖入多张图片，或直接粘贴剪贴板图片，会按图片数量创建任务卡。
             </div>
 
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
               {draftTasks.map((task, index) => (
-                <div key={task.id} className="flex min-h-[320px] flex-col rounded-lg border border-gray-200 bg-white p-3 shadow-sm transition hover:shadow-md dark:border-white/[0.08] dark:bg-gray-950/40">
+                <div key={task.id} data-tour={index === 0 ? 'batch-task-card' : undefined} className="flex min-h-[320px] flex-col rounded-lg border border-gray-200 bg-white p-3 shadow-sm transition hover:shadow-md dark:border-white/[0.08] dark:bg-gray-950/40">
                   <div className="mb-2 flex items-center justify-between gap-2">
                     <span className="text-xs font-medium text-gray-500 dark:text-gray-400">任务 {index + 1}</span>
                     <button
@@ -425,6 +427,7 @@ export default function BatchWorkspace() {
                 提交后会进入现有生图模式画廊与历史记录。
               </div>
               <button
+                data-tour="batch-submit"
                 type="button"
                 onClick={() => void handleSubmit()}
                 disabled={submitting || readyTaskCount === 0}

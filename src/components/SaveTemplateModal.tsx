@@ -22,7 +22,7 @@ export default function SaveTemplateModal() {
   const collections = useMemo(() => getTemplateCollections(), [])
 
   // 默认沿用旧习惯：最后一张图作为可替换的材质/产品图
-  const [replaceableIndex, setReplaceableIndex] = useState(() => Math.max(0, inputImages.length - 1))
+  const [replaceableIndexes, setReplaceableIndexes] = useState<number[]>(() => [Math.max(0, inputImages.length - 1)])
   // 封面默认用第一张参考图，可由用户另选
   const [coverIndex, setCoverIndex] = useState(0)
   const [name, setName] = useState('')
@@ -32,6 +32,13 @@ export default function SaveTemplateModal() {
   const [saving, setSaving] = useState(false)
 
   const onClose = () => setOpen(false)
+
+  const toggleReplaceableIndex = (idx: number) => {
+    setReplaceableIndexes((current) => {
+      if (current.includes(idx)) return current.length > 1 ? current.filter((item) => item !== idx) : current
+      return [...current, idx].sort((a, b) => a - b)
+    })
+  }
 
   const handleSave = async () => {
     setSaving(true)
@@ -44,7 +51,7 @@ export default function SaveTemplateModal() {
       templateCollectionId = groupChoice
       templateCollectionName = collections.find((c) => c.id === groupChoice)?.name
     }
-    const ok = await saveCurrentInputAsTemplate({ replaceableIndex, coverIndex, name, color, templateCollectionId, templateCollectionName })
+    const ok = await saveCurrentInputAsTemplate({ replaceableIndex: replaceableIndexes[0] ?? 0, replaceableIndexes, coverIndex, name, color, templateCollectionId, templateCollectionName })
     setSaving(false)
     if (ok) onClose()
   }
@@ -82,9 +89,9 @@ export default function SaveTemplateModal() {
                 <button
                   key={img.id}
                   type="button"
-                  onClick={() => setReplaceableIndex(idx)}
+                  onClick={() => toggleReplaceableIndex(idx)}
                   className={`relative h-16 w-16 overflow-hidden rounded-xl border-2 transition ${
-                    idx === replaceableIndex
+                    replaceableIndexes.includes(idx)
                       ? 'border-blue-500 ring-2 ring-blue-500/30'
                       : 'border-gray-200 dark:border-white/[0.08] hover:border-gray-300 dark:hover:border-white/20'
                   }`}
@@ -92,7 +99,7 @@ export default function SaveTemplateModal() {
                 >
                   <img src={img.dataUrl} alt={`图${idx + 1}`} className="h-full w-full object-cover" />
                   <span className="absolute left-1 top-1 rounded bg-black/55 px-1 text-[10px] font-medium text-white">图{idx + 1}</span>
-                  {idx === replaceableIndex && (
+                  {replaceableIndexes.includes(idx) && (
                     <span className="absolute bottom-0 left-0 right-0 bg-blue-500 py-0.5 text-center text-[10px] font-medium text-white">替换</span>
                   )}
                 </button>

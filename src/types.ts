@@ -225,6 +225,7 @@ export interface TaskRecord {
   customColor?: string
   templateCoverImageId?: string | null
   templateReplaceImageIndex?: number
+  templateReplaceImageIndexes?: number[]
   /** 模板所属文件夹（模板集合）ID；导入的模板归入各自独立文件夹 */
   templateCollectionId?: string | null
   /** 模板文件夹显示名（一般为导入 ZIP 的文件名） */

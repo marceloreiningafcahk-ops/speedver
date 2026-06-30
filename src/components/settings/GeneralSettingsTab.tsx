@@ -199,7 +199,7 @@ export default function GeneralSettingsTab({
           开启后，画廊模式图像生成完成、Agent 模式回复结束时，会发送浏览器系统通知。浏览器可能会请求通知权限或默认拒绝，请查看相关提示。
         </div>
       </div>
-      <div className="block">
+      <div className="hidden">
         <div className="mb-1 flex items-center justify-between">
           <span className="block text-sm text-gray-600 dark:text-gray-300">发送消息后自动滚动到底部</span>
           <button
@@ -217,7 +217,7 @@ export default function GeneralSettingsTab({
           开启后，在 Agent 模式发送消息成功后会自动滚动到对话底部。
         </div>
       </div>
-      <div className="block">
+      <div className="hidden">
         <div className="mb-1 flex items-center justify-between">
           <span className="block text-sm text-gray-600 dark:text-gray-300">公式输出提示</span>
           <button

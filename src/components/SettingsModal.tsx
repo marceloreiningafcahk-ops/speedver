@@ -36,7 +36,7 @@ import { DEFAULT_DROPDOWN_MAX_HEIGHT, getDropdownMaxHeight } from '../lib/dropdo
 import Select from './Select'
 import { Checkbox } from './Checkbox'
 import ViewportTooltip from './ViewportTooltip'
-import { ChevronDownIcon, CloseIcon, CopyIcon, PlusIcon, TrashIcon, GithubIcon, ExportIcon, ImportIcon, DragHandleIcon, LinkIcon, DownloadIcon } from './icons'
+import { ChevronDownIcon, CloseIcon, CopyIcon, PlusIcon, TrashIcon, GithubIcon, ExportIcon, ImportIcon, DragHandleIcon, LinkIcon, DownloadIcon, HelpCircleIcon } from './icons'
 import GeneralSettingsTab from './settings/GeneralSettingsTab'
 import TemplateSettingsTab from './settings/TemplateSettingsTab'
 import { downloadImageEntries, downloadImageEntriesAsZip, getTaskOutputImageZipEntries } from '../lib/downloadImages'
@@ -305,6 +305,8 @@ export default function SettingsModal() {
   const setShowSettings = useStore((s) => s.setShowSettings)
   const settings = useStore((s) => s.settings)
   const setSettings = useStore((s) => s.setSettings)
+  const appMode = useStore((s) => s.appMode)
+  const openTutorial = useStore((s) => s.openTutorial)
   const reusedTaskApiProfileId = useStore((s) => s.reusedTaskApiProfileId)
   const setReusedTaskApiProfile = useStore((s) => s.setReusedTaskApiProfile)
   const setConfirmDialog = useStore((s) => s.setConfirmDialog)
@@ -705,6 +707,12 @@ export default function SettingsModal() {
     setAgentMaxToolRoundsInput(String(normalizedAgentMaxToolRounds))
     commitSettings(nextDraft)
     setShowSettings(false)
+  }
+
+  const openCurrentModeTutorial = () => {
+    const topic = appMode === 'batch' ? 'batch' : appMode === 'template' ? 'template' : 'gallery'
+    handleClose()
+    window.setTimeout(() => openTutorial(topic), 0)
   }
 
   const commitTimeout = useCallback(() => {
@@ -1307,6 +1315,16 @@ export default function SettingsModal() {
                 关于
               </button>
             </nav>
+            <div className="shrink-0 border-t border-gray-100 p-3 dark:border-white/[0.08]">
+              <button
+                type="button"
+                onClick={openCurrentModeTutorial}
+                className="flex w-full items-center justify-center gap-2 rounded-xl border border-blue-400/25 bg-blue-500/10 px-3 py-2 text-sm font-medium text-blue-600 transition hover:bg-blue-500/15 dark:text-blue-300"
+              >
+                <HelpCircleIcon className="h-4 w-4" />
+                查看教程
+              </button>
+            </div>
           </div>
 
           {/* Content */}
@@ -1650,10 +1668,14 @@ export default function SettingsModal() {
                     onBlur={(e) => commitActiveProfilePatch({ apiKey: e.target.value })}
                     onCopy={(e) => e.preventDefault()}
                     onCut={(e) => e.preventDefault()}
-                    type="password"
-                    autoComplete="off"
+                    type="text"
+                    name={`api-token-${activeProfile.id}`}
+                    autoComplete="new-password"
+                    spellCheck={false}
+                    data-lpignore="true"
+                    data-1p-ignore="true"
                     placeholder={activeProfile.provider === 'fal' ? 'FAL_KEY' : activeProfile.provider === 'gemini-tikapi' ? 'TikAPI Key' : 'sk-...'}
-                    className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
+                    className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none transition [-webkit-text-security:disc] focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
                   />
                 </div>
                 <div data-selectable-text className="mt-1.5 text-xs text-gray-500 dark:text-gray-500">
@@ -1833,7 +1855,7 @@ export default function SettingsModal() {
               )}
 
               {/* 12. 配置导入导出（仅 API 配置，不含生图任务） */}
-              <div className="pt-2 border-t border-gray-100 dark:border-white/[0.08] space-y-3">
+              <div data-tour="api-config-import" className="pt-2 border-t border-gray-100 dark:border-white/[0.08] space-y-3">
                 <div data-selectable-text className="text-xs leading-relaxed text-gray-500 dark:text-gray-400">
                   导入导出全部 API 配置与应用设置（不含生图任务和图片，后者在「生图模式管理」中处理）。
                 </div>
@@ -1846,6 +1868,7 @@ export default function SettingsModal() {
                     导出配置
                   </button>
                   <button
+                    data-tour="api-config-import-button"
                     onClick={() => configImportInputRef.current?.click()}
                     disabled={isImportingConfig}
                     className="flex flex-1 min-w-[8rem] items-center justify-center gap-2 rounded-xl bg-gray-100/80 px-4 py-2.5 text-sm font-medium text-gray-700 transition-all hover:bg-gray-200 hover:text-gray-900 disabled:opacity-50 disabled:hover:bg-gray-100/80 disabled:hover:text-gray-700 dark:bg-white/[0.06] dark:text-gray-300 dark:hover:bg-white/[0.1] dark:hover:text-white dark:disabled:hover:bg-white/[0.06] dark:disabled:hover:text-gray-300"
