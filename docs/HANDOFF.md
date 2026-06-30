@@ -132,6 +132,7 @@
   1. `npm run build` 生成最新 `dist/`。
   2. 用 EdgeOne CLI 部署 `dist/` 静态产物到项目 `image-playground`。
   3. 当前可用命令：`npx edgeone makers deploy ./dist --name image-playground --env production --json`。
+- **最近一次部署**：2026-06-30，Production，Deployment ID `dpis32jsrfov`，Project ID `makers-ooaiz1b6xhvz`。
 - **其他部署方式**（备选，见仓库）：Cloudflare（`wrangler.jsonc` + `npm run deploy:cf`）、Docker（`deploy/Dockerfile` + `nginx.conf`）、Vercel（`vercel.json`）。
 
 ## 7. 代码风格红线（详见 AGENTS.md）
