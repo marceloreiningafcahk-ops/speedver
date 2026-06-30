@@ -105,6 +105,21 @@ describe('prompt image mentions', () => {
         { [images[1].id]: replacement.id },
       )).toBe(`用 ${getSelectedImageMentionLabel(1)}`)
     })
+
+    it('tracks duplicate image references by slot id instead of only image id', () => {
+      const duplicated: InputImage[] = [
+        { id: 'same-image', slotId: 'slot-a', dataUrl: 'data:image/png;base64,same' },
+        { id: 'same-image', slotId: 'slot-b', dataUrl: 'data:image/png;base64,same' },
+      ]
+      const replacement = { id: 'replacement-image', slotId: 'slot-a', dataUrl: 'data:image/png;base64,next' }
+
+      expect(remapImageMentionsForOrder(
+        `先用 ${getSelectedImageMentionLabel(0)} 再用 ${getSelectedImageMentionLabel(1)}`,
+        duplicated,
+        [replacement, duplicated[1]],
+        { 'same-image': 'replacement-image' },
+      )).toBe(`先用 ${getSelectedImageMentionLabel(0)} 再用 ${getSelectedImageMentionLabel(1)}`)
+    })
   })
 
   describe('replaceImageMentionsForApi', () => {

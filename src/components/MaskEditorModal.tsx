@@ -94,6 +94,7 @@ function drawMaskImageToCanvas(maskImage: HTMLImageElement, maskCanvas: HTMLCanv
 
 export default function MaskEditorModal() {
   const imageId = useStore((s) => s.maskEditorImageId)
+  const imageSlotId = useStore((s) => s.maskEditorImageSlotId)
   const setMaskEditorImageId = useStore((s) => s.setMaskEditorImageId)
   const maskDraft = useStore((s) => s.maskDraft)
   const setMaskDraft = useStore((s) => s.setMaskDraft)
@@ -500,7 +501,12 @@ export default function MaskEditorModal() {
 
         fillWhiteMask(maskCanvas)
 
-        if (maskDraft?.targetImageId === targetImageId) {
+        const matchesCurrentMaskDraft = maskDraft && (
+          maskDraft.targetSlotId
+            ? maskDraft.targetSlotId === imageSlotId
+            : maskDraft.targetImageId === targetImageId
+        )
+        if (matchesCurrentMaskDraft) {
           try {
             const draftImage = await loadImage(maskDraft.maskDataUrl)
             if (cancelled) return
@@ -549,7 +555,7 @@ export default function MaskEditorModal() {
       panGestureRef.current = null
       setIsPanning(false)
     }
-  }, [imageId, maskDraft, setMaskEditorImageId, showToast])
+  }, [imageId, imageSlotId, maskDraft, setMaskEditorImageId, showToast])
 
   useEffect(() => {
     if (isAltKeyPressed) {
@@ -779,6 +785,7 @@ export default function MaskEditorModal() {
 
     const token = ++saveTokenRef.current
     const savingImageId = imageId
+    const savingImageSlotId = imageSlotId ?? null
     try {
       setIsSaving(true)
       const blob = await canvasToBlob(canvas, 'image/png')
@@ -787,7 +794,8 @@ export default function MaskEditorModal() {
       if (
         saveTokenRef.current !== token ||
         activeSessionIdRef.current !== savingSessionId ||
-        useStore.getState().maskEditorImageId !== savingImageId
+        useStore.getState().maskEditorImageId !== savingImageId ||
+        (useStore.getState().maskEditorImageSlotId ?? null) !== savingImageSlotId
       ) return
 
       const latestStore = useStore.getState()
@@ -795,11 +803,12 @@ export default function MaskEditorModal() {
         replaceMaskTargetImage(latestStore.inputImages, savingImageId, {
           id: workingTargetId,
           dataUrl: sourceDataUrl,
-        }),
+        }, savingImageSlotId),
         { equivalentImageIds: { [savingImageId]: workingTargetId } },
       )
       setMaskDraft({
         targetImageId: workingTargetId,
+        targetSlotId: savingImageSlotId ?? undefined,
         maskDataUrl,
         updatedAt: Date.now(),
       })
@@ -809,7 +818,8 @@ export default function MaskEditorModal() {
       if (
         saveTokenRef.current !== token ||
         activeSessionIdRef.current !== savingSessionId ||
-        useStore.getState().maskEditorImageId !== savingImageId
+        useStore.getState().maskEditorImageId !== savingImageId ||
+        (useStore.getState().maskEditorImageSlotId ?? null) !== savingImageSlotId
       ) return
       showToast(err instanceof Error ? err.message : String(err), 'error')
     } finally {
@@ -868,7 +878,7 @@ export default function MaskEditorModal() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {maskDraft?.targetImageId === imageId && (
+          {maskDraft && (maskDraft.targetSlotId ? maskDraft.targetSlotId === imageSlotId : maskDraft.targetImageId === imageId) && (
             <button onClick={handleRemoveMask} className="flex h-8 items-center gap-1.5 px-4 text-sm font-medium text-white bg-red-500 hover:bg-red-600 rounded-lg transition">
               移除遮罩
             </button>

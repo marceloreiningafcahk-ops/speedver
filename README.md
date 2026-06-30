@@ -30,10 +30,10 @@ npm test
 
 ## 主要功能
 
-- 生图模式：提示词输入、参考图、任务历史、复用配置、收藏、详情、下载、遮罩与透明背景等。
+- 生图模式：提示词输入、参考图、任务历史、复用配置、收藏、详情、下载、遮罩与透明背景等；同一张参考图可重复作为多个槽位使用。
 - 批量模式：通用提示词、通用参考图、批量导入任务图、多任务拆图、批量提交到生图历史。
-- 模板模式：从生图输入保存模板、模板管理、多替换图位、单张/多张上传槽批量套用。
-- API 配置：多供应商 profile、本地导入导出、ZIP 配置导入引导、API Key 密文输入。
+- 模板模式：从生图输入保存模板、模板管理、多替换图位、提示词局部替换、模板组备注、单张/多张上传槽批量套用。
+- API 配置：多供应商 profile、本地导入导出、ZIP 配置覆盖导入引导、API Key 密文输入。
 - 新手教程：首次 API 配置引导，以及生图/批量/模板三个模式的真实页面聚光灯教程。
 - 收藏夹：多收藏夹管理、收藏任务、批量下载。
 - 兼容保留：Agent 相关数据与代码仍保留，主入口和相关 UI 已隐藏。
@@ -51,15 +51,15 @@ npm test
 | 任务详情 | `src/components/DetailModal.tsx` | 查看输出图、流式预览、错误、下载、编辑输出等。 |
 | 搜索与筛选 | `src/components/SearchBar.tsx` | 搜索、收藏筛选、日期筛选、模式来源筛选；Agent 来源已隐藏。 |
 | 批量模式 | `src/components/BatchWorkspace.tsx` | 通用设置、通用参考图、任务图导入、多任务拆图、批量提交。 |
-| 模板模式列表 | `src/components/TemplateWorkspace.tsx` | 模板卡片、分组、多选、框选、改名/改色/封面/替换图位编辑、批量套用入口。 |
-| 保存模板弹窗 | `src/components/SaveTemplateModal.tsx` | 从当前生图输入保存模板，支持多选替换图位、封面、名称、颜色、分组。 |
-| 模板批量套用弹窗 | `src/components/TemplateApplyModal.tsx` | 根据模板替换图位生成单张/多张上传槽，支持粘贴和批量套用。 |
+| 模板模式列表 | `src/components/TemplateWorkspace.tsx` | 模板卡片、分组、多选、框选、改名/改色/封面/替换图位编辑、模板组备注、批量套用入口。 |
+| 保存模板弹窗 | `src/components/SaveTemplateModal.tsx` | 从当前生图输入保存模板，支持多选替换图位、提示词局部替换段、封面、名称、颜色、分组。 |
+| 模板批量套用弹窗 | `src/components/TemplateApplyModal.tsx` | 根据模板替换图位生成单张/多张上传槽，支持提示词替换、粘贴和批量套用。 |
 | 设置弹窗 | `src/components/SettingsModal.tsx` | API 配置、习惯配置、模板/生图数据管理、关于页、查看教程入口。 |
 | 通用设置页 | `src/components/settings/GeneralSettingsTab.tsx` | 习惯配置；Agent 专属设置已隐藏。 |
 | 模板设置页 | `src/components/settings/TemplateSettingsTab.tsx` | 模板数据导入导出、分组范围管理等。 |
 | 新手教程 | `src/components/TutorialModal.tsx` | 真实页面聚光灯式教程、API ZIP 引导、示例结果卡、目标避让布局和点击拦截。 |
 | 收藏夹 | `src/components/favorites/` | 收藏夹列表、管理、选择器、封面卡等。 |
-| API profile 管理 | `src/lib/apiProfiles.ts` | 多供应商配置、默认值、导入合并、校验与兼容处理。 |
+| API profile 管理 | `src/lib/apiProfiles.ts` | 多供应商配置、默认值、导入合并/覆盖、校验与兼容处理。 |
 | API 请求 | `src/lib/api.ts`, `src/lib/openaiCompatibleImageApi.ts`, `src/lib/falAiImageApi.ts`, `src/lib/geminiTikapiImageApi.ts` | 不同供应商的图片生成请求与响应解析。 |
 | IndexedDB 存储 | `src/lib/db.ts` | 图片与任务相关二进制数据持久化。 |
 | ZIP 导入导出 | `src/lib/exportZip.ts` | 配置、任务、模板等 ZIP 数据导入导出。 |
@@ -72,6 +72,8 @@ npm test
 - 普通生图任务与模板共用 `TaskRecord`，通过 `kind === 'template'` 区分。
 - 普通生图列表和收藏夹会过滤模板任务，模板只在模板模式显示。
 - 模板替换图位使用 `templateReplaceImageIndexes`，旧字段 `templateReplaceImageIndex` 保留兼容。
+- 模板提示词局部替换使用 `templatePromptReplacement`；未设置替换段的模板，批量套用时不显示提示词替换输入。
+- 模板组备注使用 `templateCollectionNote`，同组模板共享，导入导出随模板记录保留。
 - 模板批量套用会读取替换图位数量，自动显示单张或多张上传槽。
 - 批量模式的通用参考图会排在每个任务参考图最前面，作为图一、图二、图三顺延。
 

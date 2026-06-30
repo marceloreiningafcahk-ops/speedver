@@ -131,7 +131,7 @@ import { clearAgentConversations, clearImages, clearTasks, getAllAgentConversati
 import { callAgentResponsesApi, callBatchImageSingle } from './lib/agentApi'
 import { getFalQueuedImageResult } from './lib/falAiImageApi'
 import { removeKeyedBackgroundFromDataUrl } from './lib/transparentImage'
-import { cleanStaleAgentInputDrafts, clearFailedTasks, deleteAgentRoundFromConversation, deleteFavoriteCollection, editOutputs, getActiveAgentRounds, getErrorToastMessage, getPersistedState, getTaskApiProfile, getTemplateApplyUploadPlan, getTemplateReplaceImageIndexes, importData, initStore, markInterruptedOpenAIRunningTasks, migratePersistedState, regenerateAgentAssistantMessage, remapAgentRoundMentionsForPathChange, removeTask, reuseConfig, submitAgentMessage, submitTask, taskMatchesFilterSourceMode, taskMatchesFilterStatus, taskMatchesSearchQuery, useStore } from './store'
+import { applyTemplatePromptReplacement, cleanStaleAgentInputDrafts, clearFailedTasks, deleteAgentRoundFromConversation, deleteFavoriteCollection, editOutputs, getActiveAgentRounds, getErrorToastMessage, getPersistedState, getTaskApiProfile, getTemplateApplyUploadPlan, getTemplatePromptReplacement, getTemplateReplaceImageIndexes, importData, initStore, markInterruptedOpenAIRunningTasks, migratePersistedState, regenerateAgentAssistantMessage, remapAgentRoundMentionsForPathChange, removeTask, reuseConfig, submitAgentMessage, submitTask, taskMatchesFilterSourceMode, taskMatchesFilterStatus, taskMatchesSearchQuery, updateTemplateCollectionNote, useStore } from './store'
 
 const imageA = { id: 'image-a', dataUrl: 'data:image/png;base64,a' }
 const imageB = { id: 'image-b', dataUrl: 'data:image/png;base64,b' }
@@ -1778,6 +1778,57 @@ describe('agent context for removed outputs', () => {
     expect(getTemplateApplyUploadPlan([single])).toEqual({ selectedCount: 1, hasSingleSlot: true, maxMultiSlots: 0 })
     expect(getTemplateApplyUploadPlan([double])).toEqual({ selectedCount: 1, hasSingleSlot: false, maxMultiSlots: 2 })
     expect(getTemplateApplyUploadPlan([single, double, triple])).toEqual({ selectedCount: 3, hasSingleSlot: true, maxMultiSlots: 3 })
+  })
+
+  it('applies a template prompt replacement only when replacement text is provided', () => {
+    const template = task({
+      prompt: '把红色杯子放在海边桌面上',
+      templatePromptReplacement: { start: 1, end: 5, originalText: '红色杯子' },
+    })
+
+    expect(getTemplatePromptReplacement(template)).toEqual({ start: 1, end: 5, originalText: '红色杯子' })
+    expect(applyTemplatePromptReplacement(template, '')).toBe(template.prompt)
+    expect(applyTemplatePromptReplacement(template, '蓝色鞋子')).toBe('把蓝色鞋子放在海边桌面上')
+  })
+
+  it('ignores stale template prompt replacement ranges after the prompt changes', () => {
+    const template = task({
+      prompt: '把绿色杯子放在海边桌面上',
+      templatePromptReplacement: { start: 1, end: 5, originalText: '红色杯子' },
+    })
+
+    expect(getTemplatePromptReplacement(template)).toBeNull()
+    expect(applyTemplatePromptReplacement(template, '蓝色鞋子')).toBe(template.prompt)
+  })
+
+  it('updates template collection notes across every template in the group', async () => {
+    const templateA = task({ id: 'template-a', kind: 'template', templateCollectionId: 'group-a', templateCollectionName: '组 A' })
+    const templateB = task({ id: 'template-b', kind: 'template', templateCollectionId: 'group-a', templateCollectionName: '组 A' })
+    const other = task({ id: 'template-other', kind: 'template', templateCollectionId: 'group-b', templateCollectionName: '组 B' })
+    useStore.setState({ tasks: [templateA, templateB, other] })
+
+    await updateTemplateCollectionNote('group-a', '用于鞋类主图')
+
+    expect(useStore.getState().tasks.find((item) => item.id === 'template-a')?.templateCollectionNote).toBe('用于鞋类主图')
+    expect(useStore.getState().tasks.find((item) => item.id === 'template-b')?.templateCollectionNote).toBe('用于鞋类主图')
+    expect(useStore.getState().tasks.find((item) => item.id === 'template-other')?.templateCollectionNote).toBeUndefined()
+  })
+
+  it('allows duplicate input image slots for the same stored image', () => {
+    useStore.setState({ appMode: 'gallery', inputImages: [], galleryInputDraft: null, prompt: '' })
+    const state = useStore.getState()
+
+    state.addInputImage({ id: 'same-image', dataUrl: 'data:image/png;base64,same' })
+    useStore.getState().addInputImage({ id: 'same-image', dataUrl: 'data:image/png;base64,same' })
+
+    const inputImages = useStore.getState().inputImages
+    expect(inputImages.map((img) => img.id)).toEqual(['same-image', 'same-image'])
+    expect(inputImages[0].slotId).toBeTruthy()
+    expect(inputImages[1].slotId).toBeTruthy()
+    expect(inputImages[0].slotId).not.toBe(inputImages[1].slotId)
+
+    useStore.getState().removeInputImage(0)
+    expect(useStore.getState().inputImages.map((img) => img.id)).toEqual(['same-image'])
   })
 
   it('clears partial failure markers without deleting successful outputs', async () => {

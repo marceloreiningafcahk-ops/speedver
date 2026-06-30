@@ -146,12 +146,21 @@ export const DEFAULT_PARAMS: TaskParams = {
 export interface InputImage {
   /** IndexedDB image store 的 id（SHA-256 hash） */
   id: string
+  /** UI 槽位 ID：允许同一张图片作为多个参考图槽位重复出现 */
+  slotId?: string
   /** data URL，用于预览 */
   dataUrl: string
 }
 
+export interface TemplatePromptReplacement {
+  start: number
+  end: number
+  originalText: string
+}
+
 export interface MaskDraft {
   targetImageId: string
+  targetSlotId?: string
   maskDataUrl: string
   updatedAt: number
 }
@@ -226,10 +235,14 @@ export interface TaskRecord {
   templateCoverImageId?: string | null
   templateReplaceImageIndex?: number
   templateReplaceImageIndexes?: number[]
+  /** 模板提示词中允许套用时替换的一段文本 */
+  templatePromptReplacement?: TemplatePromptReplacement
   /** 模板所属文件夹（模板集合）ID；导入的模板归入各自独立文件夹 */
   templateCollectionId?: string | null
   /** 模板文件夹显示名（一般为导入 ZIP 的文件名） */
   templateCollectionName?: string
+  /** 模板文件夹备注，同组模板共享 */
+  templateCollectionNote?: string
   /** 由模板批量套用生成时，记录来源模板 ID */
   sourceTemplateId?: string
   /** 由模板批量套用生成时，记录来源模板名称 */

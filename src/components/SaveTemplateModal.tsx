@@ -1,4 +1,5 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
+import type { TemplatePromptReplacement } from '../types'
 import { useStore, saveCurrentInputAsTemplate, getTemplateCollections } from '../store'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import Select from './Select'
@@ -19,7 +20,9 @@ export default function SaveTemplateModal() {
 
   const setOpen = useStore((s) => s.setShowSaveTemplateModal)
   const inputImages = useStore((s) => s.inputImages)
+  const prompt = useStore((s) => s.prompt)
   const collections = useMemo(() => getTemplateCollections(), [])
+  const promptTextareaRef = useRef<HTMLTextAreaElement>(null)
 
   // 默认沿用旧习惯：最后一张图作为可替换的材质/产品图
   const [replaceableIndexes, setReplaceableIndexes] = useState<number[]>(() => [Math.max(0, inputImages.length - 1)])
@@ -29,6 +32,7 @@ export default function SaveTemplateModal() {
   const [color, setColor] = useState('')
   const [groupChoice, setGroupChoice] = useState<string>(UNGROUPED_VALUE)
   const [newGroupName, setNewGroupName] = useState('')
+  const [promptReplacement, setPromptReplacement] = useState<TemplatePromptReplacement | null>(null)
   const [saving, setSaving] = useState(false)
 
   const onClose = () => setOpen(false)
@@ -51,9 +55,22 @@ export default function SaveTemplateModal() {
       templateCollectionId = groupChoice
       templateCollectionName = collections.find((c) => c.id === groupChoice)?.name
     }
-    const ok = await saveCurrentInputAsTemplate({ replaceableIndex: replaceableIndexes[0] ?? 0, replaceableIndexes, coverIndex, name, color, templateCollectionId, templateCollectionName })
+    const ok = await saveCurrentInputAsTemplate({ replaceableIndex: replaceableIndexes[0] ?? 0, replaceableIndexes, coverIndex, promptReplacement, name, color, templateCollectionId, templateCollectionName })
     setSaving(false)
     if (ok) onClose()
+  }
+
+  const setSelectedPromptReplacement = () => {
+    const el = promptTextareaRef.current
+    if (!el) return
+    const start = Math.min(el.selectionStart, el.selectionEnd)
+    const end = Math.max(el.selectionStart, el.selectionEnd)
+    const originalText = prompt.slice(start, end)
+    if (!originalText.trim()) {
+      setPromptReplacement(null)
+      return
+    }
+    setPromptReplacement({ start, end, originalText })
   }
 
   return (
@@ -63,7 +80,7 @@ export default function SaveTemplateModal() {
       onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}
     >
       <div className="absolute inset-0 bg-black/30 backdrop-blur-sm animate-overlay-in" onMouseDown={onClose} />
-      <div className="relative z-10 w-full max-w-md rounded-3xl border border-white/50 bg-white/95 p-5 shadow-2xl ring-1 ring-black/5 animate-modal-in dark:border-white/[0.08] dark:bg-gray-900/95 dark:ring-white/10">
+      <div className="relative z-10 max-h-[88vh] w-full max-w-md overflow-y-auto rounded-3xl border border-white/50 bg-white/95 p-5 shadow-2xl ring-1 ring-black/5 animate-modal-in custom-scrollbar dark:border-white/[0.08] dark:bg-gray-900/95 dark:ring-white/10">
         <div className="mb-5 flex items-start justify-between gap-4">
           <div>
             <h3 className="text-base font-semibold text-gray-800 dark:text-gray-100">保存为模板</h3>
@@ -80,14 +97,53 @@ export default function SaveTemplateModal() {
           </button>
         </div>
 
-        <div className="space-y-5">
+          <div className="space-y-5">
+          <div>
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <p className="text-xs font-medium text-gray-500 dark:text-gray-400">提示词替换段（可选）</p>
+              <div className="flex items-center gap-1">
+                {promptReplacement && (
+                  <button
+                    type="button"
+                    onClick={() => setPromptReplacement(null)}
+                    className="rounded-lg px-2 py-1 text-[11px] text-gray-500 transition hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-white/[0.06]"
+                  >
+                    清除
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={setSelectedPromptReplacement}
+                  className="rounded-lg bg-blue-50 px-2 py-1 text-[11px] font-medium text-blue-600 transition hover:bg-blue-100 dark:bg-blue-500/10 dark:text-blue-300 dark:hover:bg-blue-500/15"
+                >
+                  设为替换
+                </button>
+              </div>
+            </div>
+            <textarea
+              ref={promptTextareaRef}
+              readOnly
+              value={prompt}
+              rows={4}
+              className="w-full resize-y rounded-xl border border-gray-200/60 bg-gray-50/70 px-3 py-2 text-xs leading-relaxed text-gray-700 outline-none custom-scrollbar dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200"
+            />
+            {promptReplacement ? (
+              <div className="mt-2 rounded-xl border border-blue-100 bg-blue-50/60 px-3 py-2 text-xs text-blue-700 dark:border-blue-500/20 dark:bg-blue-500/10 dark:text-blue-200">
+                套用模板时可替换：
+                <span className="ml-1 font-semibold">{promptReplacement.originalText}</span>
+              </div>
+            ) : (
+              <p className="mt-1 text-[11px] text-gray-400 dark:text-gray-500">选中上方提示词中的一段，再点击“设为替换”。不设置则套用时不显示提示词替换。</p>
+            )}
+          </div>
+
           {/* 可替换图位选择 */}
           <div>
             <p className="mb-2 text-xs font-medium text-gray-500 dark:text-gray-400">可替换图位（点击选择）</p>
             <div className="flex flex-wrap gap-2">
               {inputImages.map((img, idx) => (
                 <button
-                  key={img.id}
+                  key={img.slotId ?? `${img.id}-${idx}`}
                   type="button"
                   onClick={() => toggleReplaceableIndex(idx)}
                   className={`relative h-16 w-16 overflow-hidden rounded-xl border-2 transition ${
@@ -113,7 +169,7 @@ export default function SaveTemplateModal() {
             <div className="flex flex-wrap gap-2">
               {inputImages.map((img, idx) => (
                 <button
-                  key={img.id}
+                  key={img.slotId ?? `${img.id}-${idx}`}
                   type="button"
                   onClick={() => setCoverIndex(idx)}
                   className={`relative h-16 w-16 overflow-hidden rounded-xl border-2 transition ${

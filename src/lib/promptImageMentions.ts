@@ -101,8 +101,9 @@ export function remapImageMentionsForOrder(
     const previousImage = previousImages[Number(n) - 1]
     if (!previousImage) return text
 
-    const nextImageId = equivalentImageIds[previousImage.id] ?? previousImage.id
-    const nextIndex = nextImages.findIndex((img) => img.id === nextImageId)
+    const nextIndex = previousImage.slotId
+      ? nextImages.findIndex((img) => img.slotId === previousImage.slotId)
+      : nextImages.findIndex((img) => img.id === (equivalentImageIds[previousImage.id] ?? previousImage.id))
     return nextIndex >= 0 ? getSelectedImageMentionLabel(nextIndex) : '@已移除图片'
   })
 }

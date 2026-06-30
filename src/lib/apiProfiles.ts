@@ -907,6 +907,26 @@ export function mergeImportedSettings(currentSettings: Partial<AppSettings> | un
   })
 }
 
+export function replaceImportedApiSettings(currentSettings: Partial<AppSettings> | unknown, importedSettings: Partial<AppSettings> | unknown): AppSettings {
+  const current = normalizeSettings(currentSettings)
+  const normalizedImported = normalizeSettings(importedSettings)
+  const imported = normalizeSettings({
+    ...normalizedImported,
+    profiles: dedupeApiProfiles(normalizedImported.profiles),
+  })
+
+  return normalizeSettings({
+    ...current,
+    customProviders: imported.customProviders,
+    providerOrder: imported.providerOrder,
+    profiles: imported.profiles,
+    activeProfileId: imported.activeProfileId,
+    agentTextProfileId: imported.agentTextProfileId,
+    agentImageProfileId: imported.agentImageProfileId,
+    templateApiProfileId: imported.templateApiProfileId,
+  })
+}
+
 export const DEFAULT_SETTINGS: AppSettings = normalizeSettings({
   baseUrl: DEFAULT_BASE_URL,
   apiKey: '',

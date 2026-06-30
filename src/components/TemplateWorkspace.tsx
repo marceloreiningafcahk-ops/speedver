@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { TaskRecord } from '../types'
-import { useStore, ensureImageThumbnailCached, subscribeImageThumbnail, updateTaskInStore, removeTask, renameTemplateCollection, removeTemplateCollection, getTemplateCollections, moveTemplatesToCollection, reuseConfig, getTemplateReplaceImageIndexes } from '../store'
+import { useStore, ensureImageThumbnailCached, subscribeImageThumbnail, updateTaskInStore, removeTask, renameTemplateCollection, removeTemplateCollection, getTemplateCollections, moveTemplatesToCollection, reuseConfig, getTemplateReplaceImageIndexes, getTemplatePromptReplacement, updateTemplateCollectionNote, importTemplates, clearTemplates } from '../store'
 import { TemplateIcon, TagIcon, TrashIcon, ChevronDownIcon } from './icons'
 import TemplateApplyModal from './TemplateApplyModal'
 
@@ -92,6 +92,7 @@ function TemplateCard({ template, suppressClickUntil }: { template: TaskRecord; 
       prompt: nextPrompt,
       templateReplaceImageIndex: replaceIndexDrafts[0] ?? 0,
       templateReplaceImageIndexes: replaceIndexDrafts,
+      templatePromptReplacement: getTemplatePromptReplacement({ prompt: nextPrompt, templatePromptReplacement: template.templatePromptReplacement }) ?? undefined,
     })
     setEditing(false)
   }
@@ -157,7 +158,7 @@ function TemplateCard({ template, suppressClickUntil }: { template: TaskRecord; 
                 <p className="mb-1 text-[10px] text-gray-400 dark:text-gray-500">可替换图位（套用时替换这张）</p>
                 <div className="flex flex-wrap gap-1">
                   {template.inputImageIds.map((imgId, idx) => (
-                    <CoverChoice key={imgId} imageId={imgId} index={idx} active={replaceIndexDrafts.includes(idx)} onClick={() => toggleReplaceIndexDraft(idx)} />
+                    <CoverChoice key={`${imgId}-${idx}`} imageId={imgId} index={idx} active={replaceIndexDrafts.includes(idx)} onClick={() => toggleReplaceIndexDraft(idx)} />
                   ))}
                 </div>
               </div>
@@ -175,7 +176,7 @@ function TemplateCard({ template, suppressClickUntil }: { template: TaskRecord; 
                 <p className="mb-1 text-[10px] text-gray-400 dark:text-gray-500">封面</p>
                 <div className="flex flex-wrap gap-1">
                   {template.inputImageIds.map((imgId, idx) => (
-                    <CoverChoice key={imgId} imageId={imgId} index={idx} active={coverDraft === imgId} onClick={() => setCoverDraft(imgId)} />
+                    <CoverChoice key={`${imgId}-${idx}`} imageId={imgId} index={idx} active={coverDraft === imgId} onClick={() => setCoverDraft(imgId)} />
                   ))}
                 </div>
               </div>
@@ -217,10 +218,22 @@ function TemplateCard({ template, suppressClickUntil }: { template: TaskRecord; 
 interface TemplateGroup {
   key: string
   title: string
+  note?: string
   templates: TaskRecord[]
 }
 
 const UNGROUPED_KEY = '__ungrouped__'
+
+interface ImportProgress {
+  total: number
+  done: number
+}
+
+function waitForBrowserPaint() {
+  return new Promise<void>((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+  })
+}
 
 function newCollectionId() {
   return `tplcol-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`
@@ -295,6 +308,7 @@ export default function TemplateWorkspace() {
   const showApply = useStore((s) => s.showTemplateApplyModal)
   const setConfirmDialog = useStore((s) => s.setConfirmDialog)
 
+  const importInputRef = useRef<HTMLInputElement>(null)
   const gridRef = useRef<HTMLDivElement>(null)
   const [selectionBox, setSelectionBox] = useState<{ startPageX: number; startPageY: number; currentPageX: number; currentPageY: number } | null>(null)
   const dragStart = useRef<{ pageX: number; pageY: number } | null>(null)
@@ -311,6 +325,10 @@ export default function TemplateWorkspace() {
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({})
   const [editingGroupKey, setEditingGroupKey] = useState<string | null>(null)
   const [groupNameDraft, setGroupNameDraft] = useState('')
+  const [editingGroupNoteKey, setEditingGroupNoteKey] = useState<string | null>(null)
+  const [groupNoteDraft, setGroupNoteDraft] = useState('')
+  const [importProgress, setImportProgress] = useState<ImportProgress | null>(null)
+  const isImporting = Boolean(importProgress)
 
   const toggleGroupCollapsed = (key: string) => setCollapsedGroups((prev) => ({ ...prev, [key]: !prev[key] }))
 
@@ -321,6 +339,29 @@ export default function TemplateWorkspace() {
   const commitRenameGroup = (key: string) => {
     renameTemplateCollection(key, groupNameDraft)
     setEditingGroupKey(null)
+  }
+  const startEditGroupNote = (key: string, note: string | undefined) => {
+    setEditingGroupNoteKey(key)
+    setGroupNoteDraft(note ?? '')
+  }
+  const commitGroupNote = async (key: string) => {
+    await updateTemplateCollectionNote(key === UNGROUPED_KEY ? null : key, groupNoteDraft)
+    setEditingGroupNoteKey(null)
+  }
+
+  const handleImportFiles = async (files: FileList | File[] | null) => {
+    const zipFiles = Array.from(files ?? []).filter((file) => /\.zip$/i.test(file.name) || file.type === 'application/zip' || file.type === 'application/x-zip-compressed')
+    if (!zipFiles.length || isImporting) return
+    setImportProgress({ total: zipFiles.length, done: 0 })
+    await waitForBrowserPaint()
+    try {
+      await importTemplates(zipFiles, (done, total) => {
+        setImportProgress({ total, done })
+      })
+      await waitForBrowserPaint()
+    } finally {
+      setImportProgress(null)
+    }
   }
 
   // 按 templateCollectionId 分组：手动建的归「未分组」，每个导入 ZIP 各成一组
@@ -334,6 +375,7 @@ export default function TemplateWorkspace() {
         group = {
           key,
           title: key === UNGROUPED_KEY ? '未分组' : (t.templateCollectionName?.trim() || '导入的模板'),
+          note: t.templateCollectionNote?.trim() || undefined,
           templates: [],
         }
         byKey.set(key, group)
@@ -341,6 +383,7 @@ export default function TemplateWorkspace() {
       group.templates.push(t)
       // 同组内取最新的非空名作为标题（导入项一般同名）
       if (key !== UNGROUPED_KEY && t.templateCollectionName?.trim()) group.title = t.templateCollectionName.trim()
+      if (t.templateCollectionNote?.trim()) group.note = t.templateCollectionNote.trim()
     }
     for (const group of byKey.values()) group.templates.sort((a, b) => b.createdAt - a.createdAt)
     // 未分组排最前，其余按组内最新模板时间倒序
@@ -517,12 +560,80 @@ export default function TemplateWorkspace() {
 
   return (
     <main className="pb-48" data-tour="template-workspace">
+      <input
+        ref={importInputRef}
+        type="file"
+        accept=".zip,application/zip,application/x-zip-compressed"
+        multiple
+        className="hidden"
+        onChange={(e) => {
+          const files = Array.from(e.currentTarget.files ?? [])
+          e.currentTarget.value = ''
+          void handleImportFiles(files)
+        }}
+      />
+      {importProgress && (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center bg-gray-950/35 backdrop-blur-sm">
+          <div className="w-[min(340px,calc(100vw-32px))] rounded-xl border border-gray-200 bg-white p-5 text-center shadow-2xl dark:border-white/[0.08] dark:bg-gray-900">
+            <svg className="mx-auto mb-3 h-8 w-8 animate-spin text-blue-500" fill="none" viewBox="0 0 24 24">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+            </svg>
+            <div className="text-sm font-semibold text-gray-900 dark:text-gray-100">正在导入模板</div>
+            <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {importProgress.done}/{importProgress.total} 个 ZIP 已处理
+            </div>
+            <div className="mt-4 h-2 overflow-hidden rounded-full bg-gray-100 dark:bg-white/[0.08]">
+              <div
+                className="h-full rounded-full bg-blue-500 transition-all"
+                style={{ width: `${Math.max(5, Math.round((importProgress.done / Math.max(1, importProgress.total)) * 100))}%` }}
+              />
+            </div>
+          </div>
+        </div>
+      )}
       <div className="safe-area-x max-w-7xl mx-auto px-1" data-template-grid-surface>
+        <div data-no-drag-select className="flex items-center justify-between gap-3 py-4">
+          <div>
+            <h2 className="text-xl font-semibold text-gray-900 dark:text-gray-100">模板模式</h2>
+            <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">管理保存的模板，选择后可批量套用生成。</p>
+          </div>
+          <div className="flex flex-wrap justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setConfirmDialog({
+                title: '清空全部模板',
+                message: '确定要删除所有模板及其专属图片吗？此操作不可恢复。',
+                action: () => clearTemplates(),
+              })}
+              disabled={isImporting || totalTemplates === 0}
+              className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-600 shadow-sm transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-300 dark:hover:bg-red-500/15"
+            >
+              一键清空模板
+            </button>
+            <button
+              type="button"
+              onClick={() => importInputRef.current?.click()}
+              disabled={isImporting}
+              className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 shadow-sm transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-gray-200 dark:hover:bg-white/[0.08]"
+            >
+              导入模板
+            </button>
+          </div>
+        </div>
         {totalTemplates === 0 ? (
           <div className="flex flex-col items-center justify-center gap-3 py-32 text-center text-gray-400 dark:text-gray-500">
             <TemplateIcon className="w-12 h-12 opacity-40" />
             <p className="text-base font-medium text-gray-500 dark:text-gray-400">还没有模板</p>
             <p className="text-sm">在生图模式输入提示词与参考图后，点击「保存为模板」</p>
+            <button
+              type="button"
+              onClick={() => importInputRef.current?.click()}
+              disabled={isImporting}
+              className="mt-2 rounded-lg bg-blue-500 px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-600 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              从 ZIP 导入模板
+            </button>
           </div>
         ) : (
           <div ref={gridRef} className="relative py-4">
@@ -530,6 +641,7 @@ export default function TemplateWorkspace() {
               const collapsed = !!collapsedGroups[group.key]
               const isUngrouped = group.key === UNGROUPED_KEY
               const isEditing = editingGroupKey === group.key
+              const isEditingNote = editingGroupNoteKey === group.key
               return (
                 <section key={group.key} className="mb-6">
                   <div data-no-drag-select className="mb-2 flex items-center gap-2 px-1">
@@ -568,6 +680,20 @@ export default function TemplateWorkspace() {
                     {!isEditing && (
                       <button
                         type="button"
+                        onClick={() => startEditGroupNote(group.key, group.note)}
+                        className={`rounded-md p-1 transition hover:bg-gray-100 dark:hover:bg-white/[0.06] ${
+                          group.note ? 'text-blue-500 dark:text-blue-300' : 'text-gray-400 hover:text-gray-600 dark:hover:text-gray-200'
+                        }`}
+                        title={group.note ? `备注：${group.note}` : '添加分组备注'}
+                      >
+                        <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 10h8M8 14h5m8-2a9 9 0 11-4.5-7.794L21 4l-.206 4.5A8.96 8.96 0 0121 12z" />
+                        </svg>
+                      </button>
+                    )}
+                    {!isEditing && (
+                      <button
+                        type="button"
                         onClick={() => setConfirmDialog({
                           title: '删除整个分组',
                           message: `确定删除分组「${group.title}」及其中的 ${group.templates.length} 个模板吗？此操作不可恢复。`,
@@ -580,6 +706,31 @@ export default function TemplateWorkspace() {
                       </button>
                     )}
                   </div>
+                  {isEditingNote && (
+                    <div data-no-drag-select className="mb-3 flex max-w-xl items-start gap-2 px-1">
+                      <textarea
+                        autoFocus
+                        value={groupNoteDraft}
+                        onChange={(e) => setGroupNoteDraft(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Escape') setEditingGroupNoteKey(null)
+                          if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') void commitGroupNote(group.key)
+                        }}
+                        rows={2}
+                        placeholder="填写这个模板组的使用备注"
+                        className="min-w-0 flex-1 resize-y rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs leading-relaxed outline-none focus:ring-1 focus:ring-blue-300/40 dark:border-white/10 dark:bg-white/[0.04] dark:text-gray-100"
+                      />
+                      <div className="flex shrink-0 flex-col gap-1">
+                        <button type="button" onClick={() => void commitGroupNote(group.key)} className="rounded-lg bg-blue-500 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-blue-600">保存</button>
+                        <button type="button" onClick={() => setEditingGroupNoteKey(null)} className="rounded-lg px-3 py-1.5 text-xs text-gray-500 transition hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-white/[0.06]">取消</button>
+                      </div>
+                    </div>
+                  )}
+                  {!isEditingNote && group.note && (
+                    <p data-no-drag-select className="mb-3 max-w-3xl truncate px-1 text-xs text-gray-400 dark:text-gray-500" title={group.note}>
+                      备注：{group.note}
+                    </p>
+                  )}
                   {!collapsed && (
                     <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
                       {group.templates.map((template) => (

@@ -1,6 +1,6 @@
 import { useRef, useEffect, useCallback, useState, useMemo, useLayoutEffect } from 'react'
 import { createPortal } from 'react-dom'
-import { ALL_FAVORITES_COLLECTION_ID, deleteFavoriteCollection, getTaskFavoriteCollectionIds, useStore, submitTask, submitAgentMessage, stopAgentResponse, addImageFromFile, createInputImageFromFile, deleteImageIfUnreferenced, removeMultipleTasks, getCachedImage, ensureImageCached, getActiveAgentRounds, taskMatchesFilterStatus, taskMatchesFilterDate, taskMatchesFilterSourceMode, taskMatchesSearchQuery } from '../store'
+import { ALL_FAVORITES_COLLECTION_ID, deleteFavoriteCollection, getTaskFavoriteCollectionIds, useStore, submitTask, submitAgentMessage, stopAgentResponse, createInputImageFromFile, deleteImageIfUnreferenced, removeMultipleTasks, getCachedImage, ensureImageCached, getActiveAgentRounds, taskMatchesFilterStatus, taskMatchesFilterDate, taskMatchesFilterSourceMode, taskMatchesSearchQuery } from '../store'
 import { DEFAULT_PARAMS, type TaskRecord } from '../types'
 import { getActiveApiProfile, getAgentImageApiProfile, normalizeSettings } from '../lib/apiProfiles'
 import { DEFAULT_FAL_IMAGE_SIZE, getChangedParams, getOutputImageLimitForSettings, normalizeParamsForSettings } from '../lib/paramCompatibility'
@@ -327,6 +327,17 @@ function setContentEditableSelection(el: HTMLElement, start: number, end: number
 /** API 支持的最大参考图数量 */
 const API_MAX_IMAGES = 16
 
+interface UploadProgress {
+  total: number
+  done: number
+}
+
+function waitForBrowserPaint() {
+  return new Promise<void>((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+  })
+}
+
 function getFavoriteCollectionTasksForBatch(collectionId: string, tasks: TaskRecord[]) {
   const favoriteTasks = tasks.filter((task) => task.isFavorite)
   if (collectionId === ALL_FAVORITES_COLLECTION_ID) return favoriteTasks
@@ -390,6 +401,7 @@ export default function InputBar() {
   const setPrompt = useStore((s) => s.setPrompt)
   const inputImages = useStore((s) => s.inputImages)
   const addInputImage = useStore((s) => s.addInputImage)
+  const setInputImages = useStore((s) => s.setInputImages)
   const replaceInputImage = useStore((s) => s.replaceInputImage)
   const removeInputImage = useStore((s) => s.removeInputImage)
   const clearInputImages = useStore((s) => s.clearInputImages)
@@ -629,6 +641,7 @@ export default function InputBar() {
   const prevHeightRef = useRef(42)
 
   const [isDragging, setIsDragging] = useState(false)
+  const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null)
   const [isSingleLine, setIsSingleLine] = useState(true)
   const [submitHover, setSubmitHover] = useState(false)
   const [attachHover, setAttachHover] = useState(false)
@@ -803,10 +816,10 @@ export default function InputBar() {
   const nLimitHint = useHintTooltip({ autoHideMs: 2000 })
   const streamConcurrentHint = useHintTooltip({ enabled: () => streamConcurrentByN })
   const maskTargetImage = maskDraft
-    ? inputImages.find((img) => img.id === maskDraft.targetImageId) ?? null
+    ? inputImages.find((img) => maskDraft.targetSlotId ? img.slotId === maskDraft.targetSlotId : img.id === maskDraft.targetImageId) ?? null
     : null
   const referenceImages = maskTargetImage
-    ? inputImages.filter((img) => img.id !== maskTargetImage.id)
+    ? inputImages.filter((img) => img.slotId !== maskTargetImage.slotId)
     : inputImages
   const cursorPosition = cursorPos
   const visiblePrompt = stripImageMentionMarkers(prompt)
@@ -958,7 +971,7 @@ export default function InputBar() {
     return () => {
       cancelled = true
     }
-  }, [maskDraft, maskTargetImage?.id, maskTargetImage?.dataUrl])
+  }, [maskDraft, maskTargetImage?.id, maskTargetImage?.slotId, maskTargetImage?.dataUrl])
 
   const commitN = useCallback(() => {
     nLimitHint.hide()
@@ -1072,7 +1085,11 @@ export default function InputBar() {
 
   const handleFiles = async (files: FileList | File[]) => {
     try {
-      const currentCount = useStore.getState().inputImages.length
+      const accepted = Array.from(files).filter((f) => f.type.startsWith('image/'))
+      if (!accepted.length) return
+
+      const currentImages = useStore.getState().inputImages
+      const currentCount = currentImages.length
       if (currentCount >= API_MAX_IMAGES) {
         useStore.getState().showToast(
           `参考图数量已达上限（${API_MAX_IMAGES} 张），无法继续添加`,
@@ -1082,12 +1099,23 @@ export default function InputBar() {
       }
 
       const remaining = API_MAX_IMAGES - currentCount
-      const accepted = Array.from(files).filter((f) => f.type.startsWith('image/'))
       const toAdd = accepted.slice(0, remaining)
       const discarded = accepted.length - toAdd.length
+      const nextImages = [...currentImages]
 
-      for (const file of toAdd) {
-        await addImageFromFile(file)
+      setUploadProgress({ total: toAdd.length, done: 0 })
+      await waitForBrowserPaint()
+
+      for (let index = 0; index < toAdd.length; index++) {
+        const file = toAdd[index]
+        const image = await createInputImageFromFile(file)
+        if (image) nextImages.push(image)
+        setUploadProgress({ total: toAdd.length, done: index + 1 })
+        await waitForBrowserPaint()
+      }
+
+      if (nextImages.length > currentImages.length) {
+        setInputImages(nextImages)
       }
 
       if (discarded > 0) {
@@ -1101,6 +1129,8 @@ export default function InputBar() {
         `图片添加失败：${err instanceof Error ? err.message : String(err)}`,
         'error',
       )
+    } finally {
+      setUploadProgress(null)
     }
   }
 
@@ -1118,7 +1148,7 @@ export default function InputBar() {
 
   const handleEditReferenceImage = useCallback((img: (typeof inputImages)[number], idx: number, isMaskTarget: boolean) => {
     if (isMaskTarget) {
-      setMaskEditorImageId(img.id)
+      setMaskEditorImageId(img.id, img.slotId ?? null)
       return
     }
 
@@ -1128,7 +1158,7 @@ export default function InputBar() {
     }
 
     if (settings.referenceImageEditAction === 'add-mask') {
-      setMaskEditorImageId(img.id)
+      setMaskEditorImageId(img.id, img.slotId ?? null)
       return
     }
 
@@ -1150,7 +1180,7 @@ export default function InputBar() {
           tone: 'primary',
           action: (remember) => {
             commitReferenceEditChoice('add-mask', remember)
-            setMaskEditorImageId(img.id)
+            setMaskEditorImageId(img.id, img.slotId ?? null)
           },
         },
       ],
@@ -1177,7 +1207,9 @@ export default function InputBar() {
       }
 
       const currentImages = useStore.getState().inputImages
-      const currentIdx = currentImages.findIndex((item) => item.id === target.id)
+      const currentIdx = currentImages[target.index]?.id === target.id
+        ? target.index
+        : currentImages.findIndex((item) => item.id === target.id)
       const targetIdx = currentIdx >= 0 ? currentIdx : target.index
       const previous = currentImages[targetIdx]
       if (!previous) {
@@ -1189,11 +1221,6 @@ export default function InputBar() {
         showToast('参考图未变化', 'info')
         return
       }
-      if (currentImages.some((item, itemIdx) => itemIdx !== targetIdx && item.id === image.id)) {
-        showToast('这张图片已在参考图中', 'info')
-        return
-      }
-
       replaceInputImage(targetIdx, image)
       showToast('参考图已替换', 'success')
     } catch (err) {
@@ -1276,6 +1303,8 @@ export default function InputBar() {
 
   // 粘贴图片
   useEffect(() => {
+    if (appMode !== 'gallery') return
+
     const handlePaste = (e: ClipboardEvent) => {
       const items = e.clipboardData?.items
       if (!items) return
@@ -1293,27 +1322,28 @@ export default function InputBar() {
     }
     document.addEventListener('paste', handlePaste)
     return () => document.removeEventListener('paste', handlePaste)
-  }, [])
+  }, [appMode])
 
   // 拖拽图片 - 监听整个页面
   useEffect(() => {
+    if (appMode !== 'gallery') return
+
     const handleDragEnter = (e: DragEvent) => {
+      if (!e.dataTransfer?.types.includes('Files')) return
       e.preventDefault()
-      e.stopPropagation()
       dragCounter.current++
-      if (e.dataTransfer?.types.includes('Files')) {
-        setIsDragging(true)
-      }
+      setIsDragging(true)
     }
 
     const handleDragOver = (e: DragEvent) => {
+      if (!e.dataTransfer?.types.includes('Files')) return
       e.preventDefault()
-      e.stopPropagation()
+      e.dataTransfer.dropEffect = 'copy'
     }
 
     const handleDragLeave = (e: DragEvent) => {
+      if (!e.dataTransfer?.types.includes('Files')) return
       e.preventDefault()
-      e.stopPropagation()
       dragCounter.current--
       if (dragCounter.current === 0) {
         setIsDragging(false)
@@ -1321,8 +1351,14 @@ export default function InputBar() {
     }
 
     const handleDrop = (e: DragEvent) => {
+      const transferredText = e.dataTransfer?.getData('text/plain')
+      const imageIds = transferredText?.startsWith('agent-images:')
+        ? transferredText.slice('agent-images:'.length).split(',')
+        : transferredText?.startsWith('agent-image:')
+        ? [transferredText.slice('agent-image:'.length)]
+        : []
+      if (!e.dataTransfer?.types.includes('Files') && imageIds.length === 0) return
       e.preventDefault()
-      e.stopPropagation()
       dragCounter.current = 0
       setIsDragging(false)
       const files = e.dataTransfer?.files
@@ -1330,14 +1366,6 @@ export default function InputBar() {
         handleFilesRef.current(files)
         return
       }
-
-      const transferredText = e.dataTransfer?.getData('text/plain')
-      
-      const imageIds = transferredText?.startsWith('agent-images:') 
-        ? transferredText.slice('agent-images:'.length).split(',') 
-        : transferredText?.startsWith('agent-image:')
-        ? [transferredText.slice('agent-image:'.length)]
-        : []
 
       if (imageIds.length > 0) {
         Promise.all(imageIds.map(async (imageId) => {
@@ -1359,12 +1387,14 @@ export default function InputBar() {
     document.addEventListener('drop', handleDrop)
 
     return () => {
+      dragCounter.current = 0
+      setIsDragging(false)
       document.removeEventListener('dragenter', handleDragEnter)
       document.removeEventListener('dragover', handleDragOver)
       document.removeEventListener('dragleave', handleDragLeave)
       document.removeEventListener('drop', handleDrop)
     }
-  }, [addInputImage, showToast])
+  }, [addInputImage, appMode, showToast])
 
   const adjustTextareaHeight = useCallback(() => {
     const el = textareaRef.current
@@ -1613,7 +1643,7 @@ export default function InputBar() {
   }
 
   const renderImageThumb = (img: (typeof inputImages)[number], idx: number) => {
-    const isMaskTarget = maskDraft?.targetImageId === img.id
+    const isMaskTarget = Boolean(maskDraft && (maskDraft.targetSlotId ? img.slotId === maskDraft.targetSlotId : img.id === maskDraft.targetImageId))
     const canEdit = !maskTargetImage || isMaskTarget
     const imageHintText = isMaskTarget ? '遮罩图必须为第一张图' : ''
     const displaySrc = isMaskTarget && maskPreviewUrl ? maskPreviewUrl : img.dataUrl
@@ -1722,7 +1752,7 @@ export default function InputBar() {
 
     return (
       <div
-        key={img.id}
+        key={img.slotId ?? `${img.id}-${idx}`}
         data-input-image-index={idx}
         className={`relative group inline-block h-[52px] w-[52px] shrink-0 self-start transition-opacity ${isImageDragging ? 'opacity-40' : ''}`}
         style={{ touchAction: isMaskTarget ? 'auto' : 'none' }}
@@ -1778,7 +1808,7 @@ export default function InputBar() {
           onClick={() => {
             if (suppressImageClickRef.current) return
             if (isMaskTarget) {
-              setMaskEditorImageId(img.id)
+              setMaskEditorImageId(img.id, img.slotId ?? null)
               return
             }
             if (maskTargetImage && !maskConflictNoticeShownRef.current) {
@@ -1920,6 +1950,27 @@ export default function InputBar() {
   return (
     <>
       <DragUploadOverlay visible={isDragging} atImageLimit={atImageLimit} maxImages={API_MAX_IMAGES} />
+
+      {uploadProgress && (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center bg-gray-950/35 backdrop-blur-sm">
+          <div className="w-[min(340px,calc(100vw-32px))] rounded-xl border border-gray-200 bg-white p-5 text-center shadow-2xl dark:border-white/[0.08] dark:bg-gray-900">
+            <svg className="mx-auto mb-3 h-8 w-8 animate-spin text-blue-500" fill="none" viewBox="0 0 24 24">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+            </svg>
+            <div className="text-sm font-semibold text-gray-900 dark:text-gray-100">正在导入参考图</div>
+            <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {uploadProgress.done}/{uploadProgress.total} 张图片已处理
+            </div>
+            <div className="mt-4 h-2 overflow-hidden rounded-full bg-gray-100 dark:bg-white/[0.08]">
+              <div
+                className="h-full rounded-full bg-blue-500 transition-all"
+                style={{ width: `${Math.max(5, Math.round((uploadProgress.done / Math.max(1, uploadProgress.total)) * 100))}%` }}
+              />
+            </div>
+          </div>
+        </div>
+      )}
 
       {showSizePicker && (
         <SizePickerModal

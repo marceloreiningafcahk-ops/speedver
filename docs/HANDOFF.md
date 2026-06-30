@@ -1,146 +1,259 @@
-# 项目交接文档（gpt-image-playground）
+# 项目交接文档：gpt-image-playground
 
-> 面向接手的 AI 开发助手。先读本文件，再读 `AGENTS.md`（代码风格强制规范）与 `docs/template-mode-refactor-plan.md`（模板模式总体规划）。
+> 面向下一位接手开发的 AI Agent。请先读本文件，再读 `AGENTS.md`、`README.md` 和 `docs/template-mode-refactor-plan.md`。当前项目是用户 fork 后的二次开发版本，主要推送目标是 GitHub remote `speedver`：`https://github.com/marceloreiningafcahk-ops/speedver.git`。
 
 ## 1. 项目概况
 
-- **类型**：纯前端单页应用，AI 图片生成 Playground。
-- **技术栈**：React 19 + Vite 6 + TypeScript 5.8 + Zustand 5（状态）+ Tailwind 3（样式）。
-- **数据**：全部存浏览器本地。设置/任务元数据走 Zustand `persist`，图片二进制走 IndexedDB（`src/lib/db.ts`）。无后端。
-- **包管理**：npm（有 `package-lock.json`），不要用 yarn/pnpm。
-- **当前版本**：`package.json` 0.6.10。
+- 类型：纯前端单页应用，AI 图片生成 Playground。
+- 技术栈：React 19 + Vite 6 + TypeScript 5.8 + Zustand 5 + Tailwind 3。
+- 数据：全部在浏览器本地保存。设置和任务元数据走 Zustand persist，图片 data URL/缩略图走 IndexedDB，核心封装在 `src/lib/db.ts`。
+- 包管理：npm，有 `package-lock.json`，不要改用 yarn/pnpm。
+- 当前版本：`package.json` 里是 `0.6.10`。
+- 当前主分支：`main`，跟踪 `speedver/main`。
 
-### 常用命令
+常用命令：
 
 | 操作 | 命令 |
-|------|------|
+| --- | --- |
 | 安装依赖 | `npm install` |
-| 开发服务器 | `npm run dev` |
-| 构建（含 tsc 类型检查） | `npm run build` |
-| 运行测试 | `npm test`（Vitest） |
+| 开发服务 | `npm run dev` |
+| 构建和类型检查 | `npm run build` |
+| 测试 | `npm test` |
 | 监听测试 | `npm run test:watch` |
 
-**改完代码务必先 `npm run build` 验证编译，再 `npm test`。**
+改完代码后至少跑：
 
-## 2. 三大功能模式（核心架构）
+```bash
+npm run build
+npm test
+```
 
-应用由 `appMode` 切换三块体验，store 字段 `appMode: 'gallery' | 'template' | 'agent'`：
+本轮最后验证结果：`npm run build` 通过，`npm test` 通过，19 个测试文件、235 个测试用例。
 
-1. **生图模式（gallery）**：普通图片生成 + 任务列表。卡片组件 `src/components/TaskCard.tsx`，列表 `TaskGrid.tsx`。
-2. **模板模式（template）**：模板卡浏览 / 多选 / 批量复用 / 保存模板。主组件 `src/components/TemplateWorkspace.tsx`。
-3. **收藏夹**：独立入口，`src/components/favorites/`。
-4. **Agent（agent）**：旧入口，规划中已从主导航移除，但**数据与代码保留兼容**（`AgentWorkspace.tsx`、`lib/agentApi.ts` 等仍在）。不要删，只是不作主入口；生图模式来源筛选已隐藏 Agent 归类，设置页通用配置里 Agent 专属的“发送消息后自动滚动到底部 / 公式输出提示”也已隐藏。
+## 2. 功能模式和现状
 
-### 模板与普通任务的区分
+应用用 `appMode` 切换主要体验：
 
-- 同一套任务体系，靠 `TaskRecord.kind` 区分：`kind: 'template'` 是模板，普通生图任务无此标记。
-- 模板专属字段（见 `src/types.ts` 约 220-240 行）：
-  - `customName?` — 模板自定义名称
-  - `customColor?` — 标签颜色
-  - `templateCoverImageId?` — 自定义封面图
-  - `templateReplaceImageIndex?` — 旧版单个可替换图位下标，继续写入用于兼容历史逻辑
-  - `templateReplaceImageIndexes?` — 新版多个可替换图位下标，批量套用时优先读取；通过 `getTemplateReplaceImageIndexes()` 做去重、排序和旧字段回退
-  - `sourceTemplateName?` — 由模板生成的任务回填的来源名
-- **模板多替换位规则（2026-06-29）**：
-  - `SaveTemplateModal.tsx` 保存模板时可多选参考图作为替换图，默认仍选最后一张，至少保留一个替换位。
-  - `TemplateWorkspace.tsx` 编辑模板时同样可多选替换图位，保存时写 `templateReplaceImageIndexes`，并同步旧字段 `templateReplaceImageIndex` 为第一个下标。
-  - `TemplateApplyModal.tsx` 批量套用时会按选中模板的替换位数量生成上传槽：只含单替换模板时显示 1 个上传框；含多替换模板时显示多张参考图上传槽；单替换模板和多替换模板混选时同时显示“单张参考图上传”和多张上传槽。多替换模板按下标顺序使用第 1/2/3 张上传图。
-  - `batchApplyTemplates()` 支持旧的单字符串参数，也支持 `{ singleImageDataUrl, multiImageDataUrls }`，老调用不会失效。
-- **关键约束**：普通生图列表、收藏夹都要过滤掉 `kind==='template'` 的卡，模板只在模板模式出现。
+- 生图模式：`gallery`。普通图片生成、参考图输入、任务列表和详情。
+- 批量模式：当前在 UI 上独立呈现，但仍复用生图任务提交/导出逻辑。批量模式的通用参考图作为图一，超过一张时顺延为图二/图三；右侧任务卡使用和生图模式一致的卡片排列。
+- 模板模式：`template`。模板保存、模板组、批量套用、导入导出模板。
+- 收藏夹：独立入口，代码在 `src/components/favorites/`。
+- Agent：代码仍保留用于兼容历史数据，但主入口已隐藏；筛选和设置里的 Agent 专属项也已隐藏。不要删除 Agent 相关代码，除非用户明确要求迁移或清理。
 
 ## 3. 关键文件地图
 
-| 路径 | 职责 |
-|------|------|
-| `src/store.ts` | **核心状态（5000+ 行）**。state 定义 + action。含 `persist` + IndexedDB 持久化、`normalize*` 数据迁移函数。改动注意向后兼容。新纯函数请放 `src/lib/`，勿继续堆这里。 |
-| `src/types.ts` | 共享类型（`TaskRecord`、`AppSettings`、`ApiProfile` 等）。 |
-| `src/lib/db.ts` | IndexedDB 封装。改 schema 需升 `DB_VERSION` 并处理 `onupgradeneeded`。 |
-| `src/lib/apiProfiles.ts` | 多供应商 API 配置，注意向后兼容。 |
-| `src/lib/exportZip.ts` | ZIP 导入导出核心逻辑。 |
-| `src/components/SettingsModal.tsx` | 设置弹窗（400+ 行 diff）。tab 见下。 |
-| `src/components/TemplateWorkspace.tsx` | 模板模式 UI（含改名/改色/封面/可替换位编辑、多选、框选）。 |
-| `src/components/SaveTemplateModal.tsx` | 从输入区保存模板（名称、封面、分组选择）。 |
-| `src/components/TemplateApplyModal.tsx` | 模板批量套用，弹窗导入材质/产品图（**已支持粘贴图片**）。 |
-| `src/components/TaskCard.tsx` | 生图任务卡。 |
-| `src/components/DetailModal.tsx` | 任务详情弹窗（本轮改动 174 行）。 |
-| `src/components/InputBar.tsx` | 底部输入区（提示词、参考图、粘贴处理）。 |
-| `src/components/TutorialModal.tsx` | 新手教程与首次 API 配置引导。现在是页面聚光灯式 guided tour：高亮真实 UI、周围压暗、说明卡贴近目标。 |
+| 文件 | 职责 |
+| --- | --- |
+| `src/store.ts` | 核心 Zustand store、任务动作、导入导出、模板套用、批量和输入图逻辑。文件很大，新工具函数尽量放到 `src/lib/`。 |
+| `src/types.ts` | 共享类型：`TaskRecord`、`InputImage`、`MaskDraft`、`AppSettings`、API profile 等。 |
+| `src/lib/db.ts` | IndexedDB 读写。改 schema 要升 `DB_VERSION` 并写迁移。 |
+| `src/lib/apiProfiles.ts` | API profile、自定义服务商、导入合并/覆盖逻辑。 |
+| `src/lib/exportZip.ts` | ZIP 数据导入导出底层工具。 |
+| `src/lib/promptImageMentions.ts` | `@图一/@图二` 这种提示词图片引用的重排和替换。现在优先按 `slotId` 跟踪重复图片槽位。 |
+| `src/lib/maskPreprocess.ts` | 蒙版编辑前处理和目标图替换。现在支持按 `slotId` 只替换重复图片中的目标槽位。 |
+| `src/components/InputBar.tsx` | 生图模式底部输入区：提示词、参考图、粘贴/拖拽、多图导入进度、蒙版入口。 |
+| `src/components/BatchWorkspace.tsx` | 批量模式 UI：通用设置、通用参考图、任务导入、任务卡、清空全部任务等。 |
+| `src/components/TemplateWorkspace.tsx` | 模板模式主 UI：模板组、导入模板、清空模板、备注、编辑模板字段等。 |
+| `src/components/SaveTemplateModal.tsx` | 从当前输入保存模板，支持多替换图位和提示词局部替换。 |
+| `src/components/TemplateApplyModal.tsx` | 批量套用模板，支持单图/多图上传、提示词替换输入。 |
+| `src/components/SettingsModal.tsx` | 设置弹窗。API 配置、习惯配置、模板管理、数据管理等 tab 在这里。 |
+| `src/components/TutorialModal.tsx` | 新手教程/聚光灯引导。首次 API 配置引导和各模式教程都在这里。 |
+| `README.md` | 面向开发者和用户的项目说明，已补充主要功能和文件地图。 |
 
-### 设置弹窗 Tab 结构
+## 4. 本轮已完成的重点修改
 
-`SettingsTab = 'general' | 'template' | 'api' | 'data' | 'about'`（`store.ts:122`）。
-渲染分支在 `SettingsModal.tsx`：`api`(1375+)、`general`(1315)、`template`(1325)、`data`(1880)、`about`(1992)。
+### API 配置导入覆盖
 
-- **API 配置（api）**：API 供应商/profile 配置。**配置导入导出区已在此 tab 内部**（约 1835 行，"配置导入导出（仅 API 配置，不含生图任务）"）。
-- **生图数据（data）**：普通任务与图片的导入导出 / 清理。
-- **模板模式管理（template）**：模板的导入导出（按分组多选范围）/ 清理。
+- API ZIP 导入不再追加旧 API，而是覆盖 API 相关配置。
+- 覆盖范围：`profiles`、`customProviders`、`providerOrder`、`activeProfileId`，以及依赖 API profile 的模板/Agent 默认配置。
+- 保留范围：教程状态、输入习惯、下载路线等非 API 偏好。
+- 主要实现：`replaceImportedApiSettings()` in `src/lib/apiProfiles.ts`，`importData()` in `src/store.ts`。
+- 测试：`src/lib/apiProfiles.test.ts`。
 
-## 4. 当前开发状态
+### 模板导出内存优化
 
-- git 分支 `main`。
-- 当前工作区包含模板多替换位、Agent 隐藏、新手教程/首次配置引导、批量模式优化与项目 README 文件地图改动。
-- 当前用户已要求推送 GitHub 并部署 EdgeOne；推送目标远端为 `speedver`（`marceloreiningafcahk-ops/speedver`）。
-- 本轮已验证：`npm run build` 通过，`npm test` 通过 228 个测试。
-- 教程系统已用本地 Chrome headless 验证：首次 API 配置聚光灯、配置 ZIP 高亮、跳过配置、生图/批量/模板真实页面引导、设置页“查看教程”重复打开均可用，控制台无错误。
-- 接手者继续动手前仍建议跑一次 `git status --short` 和 `npm test`，确认没有用户测试期间产生的新改动。
+- `exportTemplates()` 不再 `getAllImages()` 后过滤。
+- 现在先收集模板实际引用的 `inputImageIds` / `templateCoverImageId`，再逐个 `getImage(id)` 和 `getImageThumbnail(id)`。
+- ZIP manifest 结构保持兼容，旧导入逻辑不用改。
+- 导出失败 toast 会提示可尝试按模板组分批导出。
 
-## 5. 已完成/需回归事项
+### 模板提示词局部替换
 
-### 已完成：模板多替换位与多槽上传
+- `TaskRecord` 新增 `templatePromptReplacement?: { start; end; originalText }`。
+- 保存模板时，用户可以在完整提示词里选中一段，点击“设为提示词替换”。
+- 套用模板时，只有设置了替换段的模板才显示提示词替换 UI。
+- 用户不填替换文本时保留原提示词；填写后只替换高亮段。
+- 第一版只支持每个模板一个替换段，避免多模板混选时弹窗过复杂。
+- 主要实现：
+  - `src/components/SaveTemplateModal.tsx`
+  - `src/components/TemplateApplyModal.tsx`
+  - `getTemplatePromptReplacement()` / `applyTemplatePromptReplacement()` in `src/store.ts`
 
-- 建立模板时支持多选参考图作为替换图。
-- 编辑模板时支持修改多替换图位。
-- 批量套用模板时，根据选中模板自动显示单张上传和多张上传槽；多张上传按替换位顺序应用。
-- 兼容旧字段 `templateReplaceImageIndex`，旧模板无需迁移即可继续使用。
+### 模板组备注
 
-### 已完成：Agent UI 隐藏
+- `TaskRecord` 新增 `templateCollectionNote?: string`。
+- 模板组标题旁有备注按钮，可编辑备注；鼠标悬停组标题/备注图标可查看备注。
+- 修改备注会同步更新同组所有模板；导入导出模板时备注随模板保留。
+- 未分组模板也支持备注，写入未分组模板记录。
+- 主要实现：`src/components/TemplateWorkspace.tsx`、`updateTemplateCollectionNote()` in `src/store.ts`。
 
-- 主导航中的 Agent 已隐藏（历史兼容代码保留）。
-- 生图模式来源筛选不再显示 Agent 选项；如果旧持久化状态停留在 `agent` 筛选，会自动回到 `all`。
-- 设置页通用配置中隐藏 Agent 专属的“发送消息后自动滚动到底部”和“公式输出提示”。
+### 生图模式重复粘贴同一张图片
 
-### 已完成：首次配置引导与分模式真实页面教程
+- `InputImage` 新增 `slotId`，UI 层参考图按槽位处理，同一张底层图片 id 可以重复出现。
+- IndexedDB 图片内容仍按 hash 去重；重复的是输入区的参考图槽位。
+- 粘贴、拖拽、多图导入、删除、替换、排序、`@图一/@图二` 重排都改为槽位优先。
+- React key 不再只用图片 id，避免同 id 图片只渲染一个或删错。
+- 蒙版目标也支持 `targetSlotId`，重复图片时只替换/删除目标槽位，不影响另一个相同图片槽位。
+- 主要实现：
+  - `src/types.ts`
+  - `src/store.ts`
+  - `src/components/InputBar.tsx`
+  - `src/components/MaskEditorModal.tsx`
+  - `src/lib/promptImageMentions.ts`
+  - `src/lib/maskPreprocess.ts`
 
-- `store.ts` 新增 `TutorialTopic`、`CURRENT_TUTORIAL_VERSION`、`onboardingApiConfigReady`、`tutorialSeenModes`、`tutorialTopic` 以及 `openTutorial()/closeTutorial()` 等动作。
-- `App.tsx` 启动时会先检查 API 配置引导：若尚未完成/跳过引导，则打开“导入 API 使用配置”。不再因为本地已有可用 API Key 就静默跳过，这样首次进入站点仍会明确教用户导入 ZIP；完成或跳过后，再按当前 `appMode` 自动弹出生图/批量/模板教程；每个模式按版本只自动弹一次。
-- API 配置教程不再是独立小弹窗：会打开设置页 API 配置 tab，高亮真实“从 ZIP 导入配置”区域。没有压缩包可点说明卡里的“没有压缩包，先跳过”，不会写入 API 配置，后续真正提交任务仍由原 API 校验提示完善。
-- `SettingsModal.tsx` 的 API Key 输入框改为 `type="text"` + `[-webkit-text-security:disc]` + `autocomplete="new-password"`，视觉上仍是密文，但避免 Chrome 把它当登录密码框弹保存密码。
-- 生图教程高亮真实底部输入框、上传参考图按钮、生图按钮，并在任务区上方浮出一张 `data-tour="gallery-sample-card"` 内置示例结果卡；教程不会真的调用 API，也不会创建真实任务。除 API 配置导入步骤外，聚光灯中间会有透明拦截层，避免用户点到真实“生成/保存/提交”按钮触发实际操作。
-- 批量教程高亮真实通用设置、通用参考图上传、右侧任务导入/拖拽区、任务卡和提交按钮，说明多张通用参考图会顺延为图一/图二/图三。
-- 模板教程会先切回生图模式，依次高亮“填写模板提示词”“上传/粘贴模板参考图”“保存为模板”，再切到模板模式高亮模板列表与批量套用流程，贴合真实创建路径。
-- 教程目标选择现在按 selector 列表顺序查找，而不是浏览器 DOM 顺序；例如 `template-apply-button, template-workspace` 会优先高亮“批量套用”按钮，找不到按钮才兜底高亮工作区。说明卡也改为多候选位置自动避让高亮目标，避免遮住模板模式底部按钮。
-- `SettingsModal.tsx` 左侧底部“查看教程”按钮会先保存/关闭设置弹窗，再按当前模式重新打开真实页面教程。
-- 为教程锚点新增了若干 `data-tour` 属性：`gallery-prompt`、`gallery-upload`、`gallery-submit`、`template-save-button`、`batch-common-settings`、`batch-common-upload`、`batch-dropzone`、`batch-task-card`、`batch-submit`、`template-workspace`、`template-apply-button`、`api-config-import`。
+### 批量模式近期改动
 
-### 需回归：API 配置导入导出移入 API 配置内部（与生图管理分开）
+- 通用参考图全部按图一开始顺延，超过一张时变成图二/图三。
+- 批量任务卡改为和生图模式一致的卡片排列。
+- 模型可以选择和修改，但模型 ID 不在批量生图模式直接显示，避免用户误改。
+- 恢复“多任务拆图”按钮。
+- 删除“添加任务”、左下角审核和透明背景选项。
+- 鼠标在左侧通用设置时粘贴/拖拽添加通用参考图；在右侧任务列表时粘贴/拖拽添加任务。
+- 增加清空全部任务。
+- 上传多图作为任务时有 loading/进度框，避免用户误以为页面卡住。
 
-- **现状**：**该需求实际已基本完成**。`SettingsModal.tsx:1835` 处已有"配置导入导出（仅 API 配置，不含生图任务）"区块，位于 `activeTab === 'api'` 分支内；生图数据导入导出在 `data` tab，模板在 `template` tab，三者已分离。
-- **接手须做**：回归验证三处导入导出互不串台：
-  - API 配置导出**不含**生图任务/图片、不含模板。
-  - 生图数据导出**不含** API 配置、不含模板。
-  - 模板导出按分组范围，独立。
-- 若用户测试发现仍有混用，再据实修正 `exportZip.ts` / 各 tab 的导出范围。
+### 模板模式近期改动
 
-> 注：任务 2、3 在现有代码里已部分或大部分落地，**接手第一步是按上面的验证点逐项实测**，确认到底还差什么，而非从零重写。
+- 没有模板时增加“导入模板”按钮。
+- 模板导入使用和批量/生图多图导入一致风格的进度条。
+- 导入模板旁增加“一键清空模板”红色按钮。
+- 建立模板时支持选择多张参考图作为替换图。
+- 选择模板时，如果单替换图模板和多替换图模板混选，会打开上传页面，分别展示单张参考图上传和多张参考图上传槽。
+- 图二里 Agent 分类已隐藏；图一设置里的 Agent 专属配置也已隐藏。
 
-## 6. EdgeOne 部署
+### 新手教程和首次 API 配置
 
-- **CLI 已安装可用**：`npx edgeone --version` 正常输出。
-- **项目已关联**：`.edgeone/project.json` → `{"Name":"image-playground","ProjectId":"makers-ooaiz1b6xhvz"}`。
-- **构建产物**：`dist/`（已存在一份构建结果）。
-- **部署流程**：
-  1. `npm run build` 生成最新 `dist/`。
-  2. 用 EdgeOne CLI 部署 `dist/` 静态产物到项目 `image-playground`。
-  3. 当前可用命令：`npx edgeone makers deploy ./dist --name image-playground --env production --json`。
-- **最近一次部署**：2026-06-30，Production，Deployment ID `dpqdqy3b3ep4`，Project ID `makers-ooaiz1b6xhvz`。
-- **安全记录**：2026-06-30 已在提交 `e5b72bb` 移除 `vite.config.ts` 里误打包的本地默认 API 配置；当前 HEAD 与最新构建产物已扫描无真实 `sk-...` / EdgeOne 查询 token 命中。因密钥曾进入 Git 历史和旧部署包，相关 API Key 仍需在服务商后台轮换。
-- **其他部署方式**（备选，见仓库）：Cloudflare（`wrangler.jsonc` + `npm run deploy:cf`）、Docker（`deploy/Dockerfile` + `nginx.conf`）、Vercel（`vercel.json`）。
+- 第一次打开网站会强制进入 API 使用配置引导，要求导入 API 配置 ZIP；没有压缩包可以跳过。
+- 跳过只跳过教程/引导，不写入任何 API 配置。
+- 设置里的“查看教程”可以重复打开教程。
+- 生图教程只展示真实页面和虚假示例结果卡，不会真的调用 API 或创建真实任务。
+- 批量教程说明如何导入图片、通用参考图、多张参考图区别。
+- 模板教程先引导用户在生图模式填写提示词和参考图并保存模板，再切到模板模式介绍套用流程。
+- API Key 输入框已改为避免浏览器弹保存密码弹窗的写法：视觉仍是密文，但 `autocomplete` 使用 `new-password`。
 
-## 7. 代码风格红线（详见 AGENTS.md）
+## 5. 数据模型新增字段
 
-- 2 空格缩进、单引号、**无分号**、箭头函数始终加括号。
-- 简单优先：1-5 行单次逻辑直接内联，不抽函数。不留 TODO / stub，给完整实现。
-- 跟随所改文件的现有风格（最高优先级）。
-- **代码注释用中文**，UI 文案用中文。
-- 新工具函数放 `src/lib/`，不要继续堆进 `store.ts`。
-- `normalize*` 函数是 IndexedDB/localStorage 旧数据迁移用的，改动保持向后兼容。
+### `InputImage`
+
+```ts
+interface InputImage {
+  id: string
+  slotId?: string
+  dataUrl: string
+}
+```
+
+`id` 是 IndexedDB 图片 hash，`slotId` 是 UI 槽位。重复图片功能依赖 `slotId`，不要再用 `id` 当唯一 UI key。
+
+### `MaskDraft`
+
+```ts
+interface MaskDraft {
+  targetImageId: string
+  targetSlotId?: string
+  maskDataUrl: string
+  updatedAt: number
+}
+```
+
+旧数据没有 `targetSlotId` 时仍按 `targetImageId` 回退。
+
+### `TaskRecord` 模板字段
+
+```ts
+templatePromptReplacement?: {
+  start: number
+  end: number
+  originalText: string
+}
+templateCollectionNote?: string
+```
+
+`templatePromptReplacement` 必须用当前 prompt 校验：`prompt.slice(start, end) === originalText`，否则视为失效。
+
+## 6. 测试覆盖
+
+新增/调整过的重点测试：
+
+- `src/lib/apiProfiles.test.ts`：API ZIP 覆盖导入。
+- `src/store.test.ts`：模板提示词替换、模板组备注、重复 input image 槽位。
+- `src/lib/promptImageMentions.test.ts`：重复图片槽位重排时 `@图X` 引用不串位。
+- `src/lib/maskPreprocess.test.ts`：蒙版目标替换旧逻辑仍兼容。
+
+本轮完成后已跑：
+
+```bash
+npm run build
+npm test
+```
+
+结果：全部通过。
+
+## 7. GitHub 和部署
+
+Git remote：
+
+```bash
+origin    https://github.com/CookSleep/gpt_image_playground.git
+batch-ver https://github.com/ywjzywn-coder/batch-ver.git
+speedver  https://github.com/marceloreiningafcahk-ops/speedver.git
+```
+
+当前用户要求的新开发主要推送到 `speedver`。本地 `main` 已跟踪 `speedver/main`。
+
+推荐同步命令：
+
+```bash
+git status -sb
+npm run build
+npm test
+git add README.md docs/HANDOFF.md src
+git commit -m "Improve template API import and duplicate image handling"
+git push speedver main
+```
+
+注意：当前环境没有安装 GitHub CLI `gh`，所以不能用 `gh pr create`。如需 PR，需要先安装并登录 `gh`，或直接在 GitHub 网页创建。
+
+## 8. EdgeOne 部署
+
+- EdgeOne 项目配置：`.edgeone/project.json`
+- 项目名：`image-playground`
+- Project ID：`makers-ooaiz1b6xhvz`
+- 构建产物：`dist/`
+- 部署命令：
+
+```bash
+npm run build
+npx edgeone makers deploy ./dist --name image-playground --env production --json
+```
+
+最近一次已知生产部署：2026-06-30，Deployment ID `dpqdqy3b3ep4`。
+
+当前用户这次只要求同步 GitHub，没有要求部署 EdgeOne。
+
+## 9. 安全记录
+
+- 2026-06-30 已在提交 `e5b72bb` 移除曾误打包进 `vite.config.ts` 的本地默认 API 配置。
+- 本轮提交前执行过敏感信息扫描，未发现真实 `sk-...` API Key 或 EdgeOne token。扫描命中的 `task-live` 等为测试里的假任务 id。
+- 由于密钥曾进入 Git 历史和旧部署包，相关 API Key 仍应在服务商后台轮换。
+
+## 10. 接手注意事项
+
+- 不要把模板任务和普通生图任务混在同一个列表展示；普通任务列表要过滤 `kind === 'template'`。
+- 不要删除 Agent 代码；当前只是隐藏入口和部分 UI。
+- 新增持久化字段时一定要更新 `normalize*` 函数，保持旧 localStorage/IndexedDB 数据能恢复。
+- 输入区参考图现在按槽位处理：任何 UI key、删除、拖拽、蒙版主图判断都要优先考虑 `slotId`。
+- API 配置 ZIP 导入是覆盖式；普通 URL/剪贴板自定义服务商导入仍保留合并逻辑。
+- 模板导出不要重新改回 `getAllImages()`，大图库会造成内存压力。
+- UI 文案保持中文；代码风格跟随现有文件：2 空格、单引号、无分号。

@@ -1,9 +1,44 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useStore, batchApplyTemplates, getTemplateApplyUploadPlan } from '../store'
+import { useStore, batchApplyTemplates, getTemplateApplyUploadPlan, getTemplatePromptReplacement } from '../store'
+import type { TaskRecord } from '../types'
 import { fileToDataUrl } from '../lib/dataUrl'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 
 type UploadSlotTarget = { kind: 'single' | 'multi'; index: number }
+
+function TemplatePromptReplacementEditor({
+  template,
+  value,
+  onChange,
+}: {
+  template: TaskRecord
+  value: string
+  onChange: (value: string) => void
+}) {
+  const replacement = getTemplatePromptReplacement(template)
+  if (!replacement) return null
+  const title = template.customName?.trim() || template.prompt.slice(0, 18) || '未命名模板'
+  return (
+    <div className="rounded-2xl border border-gray-100 bg-gray-50/70 p-3 dark:border-white/[0.06] dark:bg-white/[0.03]">
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <p className="min-w-0 truncate text-xs font-semibold text-gray-700 dark:text-gray-200" title={title}>{title}</p>
+        <span className="shrink-0 rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-medium text-blue-600 dark:bg-blue-500/10 dark:text-blue-300">提示词替换</span>
+      </div>
+      <div className="max-h-24 overflow-y-auto rounded-xl bg-white/70 px-3 py-2 text-xs leading-relaxed text-gray-600 custom-scrollbar dark:bg-black/10 dark:text-gray-300">
+        <span>{template.prompt.slice(0, replacement.start)}</span>
+        <mark className="rounded bg-yellow-200/80 px-1 text-yellow-950 dark:bg-yellow-400/25 dark:text-yellow-100">{replacement.originalText}</mark>
+        <span>{template.prompt.slice(replacement.end)}</span>
+      </div>
+      <textarea
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        rows={2}
+        placeholder="填写替换这段提示词的内容；留空则保留原文"
+        className="mt-2 w-full resize-y rounded-xl border border-gray-200/70 bg-white px-3 py-2 text-xs leading-relaxed outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-gray-100 dark:focus:border-blue-500/50"
+      />
+    </div>
+  )
+}
 
 function UploadSlot({
   label,
@@ -72,6 +107,7 @@ export default function TemplateApplyModal() {
 
   const [singleImage, setSingleImage] = useState('')
   const [multiImages, setMultiImages] = useState<string[]>([])
+  const [promptReplacements, setPromptReplacements] = useState<Record<string, string>>({})
   const [activeSlot, setActiveSlot] = useState<UploadSlotTarget>({ kind: 'single', index: 0 })
   const [pendingSlot, setPendingSlot] = useState<UploadSlotTarget>({ kind: 'single', index: 0 })
   const [submitting, setSubmitting] = useState(false)
@@ -81,6 +117,10 @@ export default function TemplateApplyModal() {
     [tasks, selectedTemplateIds],
   )
   const slotPlan = useMemo(() => getTemplateApplyUploadPlan(templates), [templates])
+  const promptReplacementTemplates = useMemo(
+    () => templates.filter((template) => Boolean(getTemplatePromptReplacement(template))),
+    [templates],
+  )
 
   useEffect(() => {
     setMultiImages((current) => Array.from({ length: slotPlan.maxMultiSlots }, (_, index) => current[index] ?? ''))
@@ -89,6 +129,11 @@ export default function TemplateApplyModal() {
       setPendingSlot({ kind: 'multi', index: 0 })
     }
   }, [slotPlan.hasSingleSlot, slotPlan.maxMultiSlots])
+
+  useEffect(() => {
+    const activeIds = new Set(promptReplacementTemplates.map((template) => template.id))
+    setPromptReplacements((current) => Object.fromEntries(Object.entries(current).filter(([id]) => activeIds.has(id))))
+  }, [promptReplacementTemplates])
 
   const onClose = () => setOpen(false)
 
@@ -169,6 +214,7 @@ export default function TemplateApplyModal() {
     const ok = await batchApplyTemplates({
       singleImageDataUrl: slotPlan.hasSingleSlot ? singleImage : undefined,
       multiImageDataUrls: slotPlan.maxMultiSlots > 0 ? multiImages.slice(0, slotPlan.maxMultiSlots) : undefined,
+      promptReplacements,
     })
     setSubmitting(false)
     if (ok) {
@@ -215,6 +261,22 @@ export default function TemplateApplyModal() {
         />
 
         <div className="min-h-0 flex-1 overflow-y-auto p-5 custom-scrollbar">
+          {promptReplacementTemplates.length > 0 && (
+            <div className="mb-5 space-y-3">
+              <div>
+                <p className="text-xs font-semibold text-gray-700 dark:text-gray-200">提示词替换</p>
+                <p className="mt-1 text-[11px] text-gray-400 dark:text-gray-500">只显示保存模板时设置过替换段的模板；留空会保留模板原文。</p>
+              </div>
+              {promptReplacementTemplates.map((template) => (
+                <TemplatePromptReplacementEditor
+                  key={template.id}
+                  template={template}
+                  value={promptReplacements[template.id] ?? ''}
+                  onChange={(value) => setPromptReplacements((current) => ({ ...current, [template.id]: value }))}
+                />
+              ))}
+            </div>
+          )}
           <div className="grid gap-5 md:grid-cols-2">
             {slotPlan.hasSingleSlot && (
               <UploadSlot

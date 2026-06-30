@@ -12,12 +12,13 @@ import type {
   InputImage,
   MaskDraft,
   TaskRecord,
+  TemplatePromptReplacement,
   FavoriteCollection,
   ResponsesApiResponse,
   ResponsesOutputItem,
 } from './types'
 import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_PARAMS } from './types'
-import { DEFAULT_SETTINGS, getActiveApiProfile, getAgentImageApiProfile, getAgentTextApiProfile, getCustomProviderDefinition, getTemplateApiProfile, mergeImportedSettings, normalizeSettings, validateApiProfile } from './lib/apiProfiles'
+import { DEFAULT_SETTINGS, getActiveApiProfile, getAgentImageApiProfile, getAgentTextApiProfile, getCustomProviderDefinition, getTemplateApiProfile, mergeImportedSettings, normalizeSettings, replaceImportedApiSettings, validateApiProfile } from './lib/apiProfiles'
 import { dismissAllTooltips } from './lib/tooltipDismiss'
 import { remapImageMentionsForOrder, replaceImageMentionsForApi } from './lib/promptImageMentions'
 import {
@@ -93,6 +94,7 @@ type AgentInputDraft = {
   inputImages: InputImage[]
   maskDraft: MaskDraft | null
   maskEditorImageId: string | null
+  maskEditorImageSlotId?: string | null
   updatedAt?: number
 }
 
@@ -347,9 +349,18 @@ function startThumbnailBackfill(id: string) {
   })
 }
 
-function orderImagesWithMaskFirst(images: InputImage[], maskTargetImageId: string | null | undefined) {
-  if (!maskTargetImageId) return images
-  const maskIdx = images.findIndex((img) => img.id === maskTargetImageId)
+function imageMatchesMaskDraft(img: InputImage, maskDraft: Pick<MaskDraft, 'targetImageId' | 'targetSlotId'> | null | undefined) {
+  if (!maskDraft) return false
+  return maskDraft.targetSlotId ? img.slotId === maskDraft.targetSlotId : img.id === maskDraft.targetImageId
+}
+
+function findMaskTargetImage(images: InputImage[], maskDraft: Pick<MaskDraft, 'targetImageId' | 'targetSlotId'> | null | undefined) {
+  return images.find((img) => imageMatchesMaskDraft(img, maskDraft)) ?? null
+}
+
+function orderImagesWithMaskFirst(images: InputImage[], maskDraft: Pick<MaskDraft, 'targetImageId' | 'targetSlotId'> | null | undefined) {
+  if (!maskDraft) return images
+  const maskIdx = images.findIndex((img) => imageMatchesMaskDraft(img, maskDraft))
   if (maskIdx <= 0) return images
   const next = [...images]
   const [maskImage] = next.splice(maskIdx, 1)
@@ -693,13 +704,13 @@ export function getPersistedState(state: AppState) {
     ...(settings.persistInputOnRestart && (state.appMode === 'gallery' || galleryInputDraft)
       ? {
           prompt: galleryInputDraft?.prompt ?? '',
-          inputImages: galleryInputDraft?.inputImages.map((img) => ({ id: img.id, dataUrl: '' })) ?? [],
+          inputImages: galleryInputDraft?.inputImages.map(getPersistableInputImage) ?? [],
         }
       : {}),
     dismissedCodexCliPrompts: state.dismissedCodexCliPrompts,
     appMode: state.appMode,
     galleryInputDraft: settings.persistInputOnRestart && galleryInputDraft
-      ? { ...galleryInputDraft, inputImages: galleryInputDraft.inputImages.map((img) => ({ id: img.id, dataUrl: '' })) }
+      ? { ...galleryInputDraft, inputImages: galleryInputDraft.inputImages.map(getPersistableInputImage) }
       : null,
     ...(agentConversationMigrationPending && !agentConversationPersistenceReady
       ? { agentConversations: getPersistableAgentConversations(state.agentConversations) }
@@ -837,7 +848,8 @@ interface AppState {
   setMaskDraft: (draft: MaskDraft | null) => void
   clearMaskDraft: () => void
   maskEditorImageId: string | null
-  setMaskEditorImageId: (id: string | null) => void
+  maskEditorImageSlotId?: string | null
+  setMaskEditorImageId: (id: string | null, slotId?: string | null) => void
   galleryInputDraft: AgentInputDraft | null
 
   // 参数
@@ -1028,12 +1040,29 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value))
 }
 
+let inputSlotUid = 0
+function createInputSlotId() {
+  return `slot-${Date.now().toString(36)}-${(++inputSlotUid).toString(36)}-${Math.random().toString(36).slice(2, 7)}`
+}
+
+function withInputSlot(img: InputImage, slotId = img.slotId): InputImage {
+  return { ...img, slotId: slotId || createInputSlotId() }
+}
+
+function getPersistableInputImage(img: InputImage): InputImage {
+  return { id: img.id, slotId: img.slotId, dataUrl: '' }
+}
+
 function normalizeInputImages(value: unknown): InputImage[] {
   if (!Array.isArray(value)) return []
   return value
     .map((img): InputImage | null => {
       if (!isRecord(img) || typeof img.id !== 'string') return null
-      return { id: img.id, dataUrl: typeof img.dataUrl === 'string' ? img.dataUrl : '' }
+      return withInputSlot({
+        id: img.id,
+        slotId: typeof img.slotId === 'string' ? img.slotId : undefined,
+        dataUrl: typeof img.dataUrl === 'string' ? img.dataUrl : '',
+      })
     })
     .filter((img): img is InputImage => img != null)
 }
@@ -1043,6 +1072,7 @@ function normalizeMaskDraft(value: unknown): MaskDraft | null {
   if (typeof value.targetImageId !== 'string' || typeof value.maskDataUrl !== 'string') return null
   return {
     targetImageId: value.targetImageId,
+    targetSlotId: typeof value.targetSlotId === 'string' ? value.targetSlotId : undefined,
     maskDataUrl: value.maskDataUrl,
     updatedAt: typeof value.updatedAt === 'number' ? value.updatedAt : Date.now(),
   }
@@ -1056,6 +1086,7 @@ function normalizeAgentInputDraft(value: unknown, fallbackUpdatedAt = Date.now()
     inputImages: normalizeInputImages(draft.inputImages),
     maskDraft: normalizeMaskDraft(draft.maskDraft),
     maskEditorImageId: typeof draft.maskEditorImageId === 'string' ? draft.maskEditorImageId : null,
+    maskEditorImageSlotId: typeof draft.maskEditorImageSlotId === 'string' ? draft.maskEditorImageSlotId : null,
     updatedAt,
   }
 }
@@ -1093,12 +1124,13 @@ export function cleanStaleAgentInputDrafts(drafts: Record<string, AgentInputDraf
   return next
 }
 
-function clearInputDraftState(): Pick<AgentInputDraft, 'prompt' | 'inputImages' | 'maskDraft' | 'maskEditorImageId'> {
+function clearInputDraftState(): Pick<AgentInputDraft, 'prompt' | 'inputImages' | 'maskDraft' | 'maskEditorImageId' | 'maskEditorImageSlotId'> {
   return {
     prompt: '',
     inputImages: [],
     maskDraft: null,
     maskEditorImageId: null,
+    maskEditorImageSlotId: null,
   }
 }
 
@@ -1108,22 +1140,24 @@ function copyAgentInputDraft(draft: AgentInputDraft): AgentInputDraft {
     inputImages: draft.inputImages.map((img) => ({ ...img })),
     maskDraft: draft.maskDraft ? { ...draft.maskDraft } : null,
     maskEditorImageId: draft.maskEditorImageId,
+    maskEditorImageSlotId: draft.maskEditorImageSlotId ?? null,
     updatedAt: draft.updatedAt ?? Date.now(),
   }
 }
 
-function getCurrentAgentInputDraft(state: Pick<AppState, 'prompt' | 'inputImages' | 'maskDraft' | 'maskEditorImageId'>): AgentInputDraft {
+function getCurrentAgentInputDraft(state: Pick<AppState, 'prompt' | 'inputImages' | 'maskDraft' | 'maskEditorImageId' | 'maskEditorImageSlotId'>): AgentInputDraft {
   return {
     prompt: state.prompt,
     inputImages: state.inputImages,
     maskDraft: state.maskDraft,
     maskEditorImageId: state.maskEditorImageId,
+    maskEditorImageSlotId: state.maskEditorImageSlotId ?? null,
     updatedAt: Date.now(),
   }
 }
 
 function isEmptyAgentInputDraft(draft: AgentInputDraft) {
-  return draft.prompt.length === 0 && draft.inputImages.length === 0 && !draft.maskDraft && !draft.maskEditorImageId
+  return draft.prompt.length === 0 && draft.inputImages.length === 0 && !draft.maskDraft && !draft.maskEditorImageId && !draft.maskEditorImageSlotId
 }
 
 function setAgentInputDraft(drafts: Record<string, AgentInputDraft>, conversationId: string, draft: AgentInputDraft) {
@@ -1136,12 +1170,12 @@ function setAgentInputDraft(drafts: Record<string, AgentInputDraft>, conversatio
   return next
 }
 
-function saveActiveAgentInputDrafts(state: Pick<AppState, 'appMode' | 'activeAgentConversationId' | 'agentInputDrafts' | 'prompt' | 'inputImages' | 'maskDraft' | 'maskEditorImageId'>) {
+function saveActiveAgentInputDrafts(state: Pick<AppState, 'appMode' | 'activeAgentConversationId' | 'agentInputDrafts' | 'prompt' | 'inputImages' | 'maskDraft' | 'maskEditorImageId' | 'maskEditorImageSlotId'>) {
   if (state.appMode !== 'agent' || !state.activeAgentConversationId) return state.agentInputDrafts
   return setAgentInputDraft(state.agentInputDrafts, state.activeAgentConversationId, getCurrentAgentInputDraft(state))
 }
 
-function saveGalleryInputDraft(state: Pick<AppState, 'appMode' | 'galleryInputDraft' | 'prompt' | 'inputImages' | 'maskDraft' | 'maskEditorImageId'>) {
+function saveGalleryInputDraft(state: Pick<AppState, 'appMode' | 'galleryInputDraft' | 'prompt' | 'inputImages' | 'maskDraft' | 'maskEditorImageId' | 'maskEditorImageSlotId'>) {
   if (state.appMode !== 'gallery') return state.galleryInputDraft
   const draft = getCurrentAgentInputDraft(state)
   return isEmptyAgentInputDraft(draft) ? null : copyAgentInputDraft(draft)
@@ -1151,17 +1185,18 @@ function getPersistableGalleryInputDraft(state: AppState) {
   return saveGalleryInputDraft(state)
 }
 
-function restoreGalleryInputDraftState(draft: AgentInputDraft | null): Pick<AgentInputDraft, 'prompt' | 'inputImages' | 'maskDraft' | 'maskEditorImageId'> {
+function restoreGalleryInputDraftState(draft: AgentInputDraft | null): Pick<AgentInputDraft, 'prompt' | 'inputImages' | 'maskDraft' | 'maskEditorImageId' | 'maskEditorImageSlotId'> {
   if (!draft) return clearInputDraftState()
   return {
     prompt: draft.prompt,
     inputImages: draft.inputImages.map((img) => ({ ...img })),
     maskDraft: draft.maskDraft ? { ...draft.maskDraft } : null,
     maskEditorImageId: draft.maskEditorImageId,
+    maskEditorImageSlotId: draft.maskEditorImageSlotId ?? null,
   }
 }
 
-function restoreAgentInputDraftState(drafts: Record<string, AgentInputDraft>, conversationId: string | null): Pick<AgentInputDraft, 'prompt' | 'inputImages' | 'maskDraft' | 'maskEditorImageId'> {
+function restoreAgentInputDraftState(drafts: Record<string, AgentInputDraft>, conversationId: string | null): Pick<AgentInputDraft, 'prompt' | 'inputImages' | 'maskDraft' | 'maskEditorImageId' | 'maskEditorImageSlotId'> {
   const draft = conversationId ? drafts[conversationId] : null
   return restoreGalleryInputDraftState(draft ?? null)
 }
@@ -1175,6 +1210,7 @@ function syncActiveInputDraft<T extends Partial<AgentInputDraft>>(
     inputImages: patch.inputImages ?? state.inputImages,
     maskDraft: patch.maskDraft !== undefined ? patch.maskDraft : state.maskDraft,
     maskEditorImageId: patch.maskEditorImageId !== undefined ? patch.maskEditorImageId : state.maskEditorImageId,
+    maskEditorImageSlotId: patch.maskEditorImageSlotId !== undefined ? patch.maskEditorImageSlotId : state.maskEditorImageSlotId,
   }
   if (state.appMode === 'gallery') {
     return {
@@ -1197,7 +1233,7 @@ function getPersistableAgentInputDrafts(state: AppState) {
     if (!conversationIds.has(conversationId) || isEmptyAgentInputDraft(draft)) continue
     persistable[conversationId] = {
       ...copyAgentInputDraft(draft),
-      inputImages: draft.inputImages.map((img) => ({ id: img.id, dataUrl: '' })),
+      inputImages: draft.inputImages.map(getPersistableInputImage),
     }
   }
   return persistable
@@ -1339,8 +1375,7 @@ export const useStore = create<AppState>()(
       inputImages: [],
       addInputImage: (img) =>
         set((s) => {
-          if (s.inputImages.find((i) => i.id === img.id)) return s
-          return syncActiveInputDraft(s, { inputImages: [...s.inputImages, img] })
+          return syncActiveInputDraft(s, { inputImages: [...s.inputImages, withInputSlot(img)] })
         }),
       replaceInputImage: (idx, img) => {
         let removedImageId: string | null = null
@@ -1348,14 +1383,14 @@ export const useStore = create<AppState>()(
           if (idx < 0 || idx >= s.inputImages.length) return s
           const previous = s.inputImages[idx]
           if (!previous || previous.id === img.id) return s
-          if (s.inputImages.some((item, itemIdx) => itemIdx !== idx && item.id === img.id)) return s
           removedImageId = previous.id
-          const inputImages = s.inputImages.map((item, itemIdx) => itemIdx === idx ? img : item)
-          const shouldClearMask = previous.id === s.maskDraft?.targetImageId
+          const nextImage = withInputSlot(img, previous.slotId)
+          const inputImages = s.inputImages.map((item, itemIdx) => itemIdx === idx ? nextImage : item)
+          const shouldClearMask = imageMatchesMaskDraft(previous, s.maskDraft)
           return syncActiveInputDraft(s, {
             inputImages,
             prompt: remapImageMentionsForOrder(s.prompt, s.inputImages, inputImages, { [previous.id]: img.id }),
-            ...(shouldClearMask ? { maskDraft: null, maskEditorImageId: null } : {}),
+            ...(shouldClearMask ? { maskDraft: null, maskEditorImageId: null, maskEditorImageSlotId: null } : {}),
           })
         })
         if (removedImageId) void deleteImageIfUnreferenced(removedImageId)
@@ -1364,11 +1399,11 @@ export const useStore = create<AppState>()(
         set((s) => {
           const removed = s.inputImages[idx]
           const inputImages = s.inputImages.filter((_, i) => i !== idx)
-          const shouldClearMask = removed?.id === s.maskDraft?.targetImageId
+          const shouldClearMask = removed ? imageMatchesMaskDraft(removed, s.maskDraft) : false
           return syncActiveInputDraft(s, {
             inputImages,
             prompt: remapImageMentionsForOrder(s.prompt, s.inputImages, inputImages),
-            ...(shouldClearMask ? { maskDraft: null, maskEditorImageId: null } : {}),
+            ...(shouldClearMask ? { maskDraft: null, maskEditorImageId: null, maskEditorImageSlotId: null } : {}),
           })
         }),
       clearInputImages: () =>
@@ -1379,26 +1414,26 @@ export const useStore = create<AppState>()(
             prompt: remapImageMentionsForOrder(s.prompt, s.inputImages, []),
             maskDraft: null,
             maskEditorImageId: null,
+            maskEditorImageSlotId: null,
           })
         }),
       setInputImages: (imgs, options) =>
         set((s) => {
-          const inputImages = orderImagesWithMaskFirst(imgs, s.maskDraft?.targetImageId)
+          const inputImages = orderImagesWithMaskFirst(imgs.map((img) => withInputSlot(img)), s.maskDraft)
           const shouldClearMask =
-            Boolean(s.maskDraft) && !inputImages.some((img) => img.id === s.maskDraft?.targetImageId)
+            Boolean(s.maskDraft) && !findMaskTargetImage(inputImages, s.maskDraft)
           return syncActiveInputDraft(s, {
             inputImages,
             prompt: remapImageMentionsForOrder(s.prompt, s.inputImages, inputImages, options?.equivalentImageIds),
-            ...(shouldClearMask ? { maskDraft: null, maskEditorImageId: null } : {}),
+            ...(shouldClearMask ? { maskDraft: null, maskEditorImageId: null, maskEditorImageSlotId: null } : {}),
           })
         }),
       moveInputImage: (fromIdx, toIdx) =>
         set((s) => {
           const images = [...s.inputImages]
           if (fromIdx < 0 || fromIdx >= images.length) return s
-          const maskTargetImageId = s.maskDraft?.targetImageId
-          if (maskTargetImageId && images[fromIdx]?.id === maskTargetImageId) return s
-          const minTargetIdx = maskTargetImageId && images.some((img) => img.id === maskTargetImageId) ? 1 : 0
+          if (imageMatchesMaskDraft(images[fromIdx], s.maskDraft)) return s
+          const minTargetIdx = findMaskTargetImage(images, s.maskDraft) ? 1 : 0
           const targetIdx = Math.max(minTargetIdx, Math.min(images.length, toIdx))
           const insertIdx = fromIdx < targetIdx ? targetIdx - 1 : targetIdx
           if (insertIdx === fromIdx) return s
@@ -1412,18 +1447,19 @@ export const useStore = create<AppState>()(
       maskDraft: null,
       setMaskDraft: (maskDraft) =>
         set((s) => {
-          const inputImages = orderImagesWithMaskFirst(s.inputImages, maskDraft?.targetImageId)
+          const inputImages = orderImagesWithMaskFirst(s.inputImages, maskDraft)
           return syncActiveInputDraft(s, {
             maskDraft,
             inputImages,
             prompt: remapImageMentionsForOrder(s.prompt, s.inputImages, inputImages),
           })
         }),
-      clearMaskDraft: () => set((s) => syncActiveInputDraft(s, { maskDraft: null })),
+      clearMaskDraft: () => set((s) => syncActiveInputDraft(s, { maskDraft: null, maskEditorImageSlotId: null })),
       maskEditorImageId: null,
-      setMaskEditorImageId: (maskEditorImageId) => {
+      maskEditorImageSlotId: null,
+      setMaskEditorImageId: (maskEditorImageId, maskEditorImageSlotId = null) => {
         if (maskEditorImageId) dismissAllTooltips()
-        set((s) => syncActiveInputDraft(s, { maskEditorImageId }))
+        set((s) => syncActiveInputDraft(s, { maskEditorImageId, maskEditorImageSlotId }))
       },
       galleryInputDraft: null,
 
@@ -1932,6 +1968,24 @@ export function getTemplateApplyUploadPlan(templates: Array<Pick<TaskRecord, 'in
   }
 }
 
+export function getTemplatePromptReplacement(template: Pick<TaskRecord, 'prompt' | 'templatePromptReplacement'>): TemplatePromptReplacement | null {
+  const replacement = template.templatePromptReplacement
+  if (!replacement) return null
+  const start = Math.trunc(Number(replacement.start))
+  const end = Math.trunc(Number(replacement.end))
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end <= start || end > template.prompt.length) return null
+  const originalText = typeof replacement.originalText === 'string' ? replacement.originalText : ''
+  if (!originalText || template.prompt.slice(start, end) !== originalText) return null
+  return { start, end, originalText }
+}
+
+export function applyTemplatePromptReplacement(template: Pick<TaskRecord, 'prompt' | 'templatePromptReplacement'>, replacementText?: string): string {
+  const replacement = getTemplatePromptReplacement(template)
+  if (!replacement) return template.prompt
+  if (!replacementText?.trim()) return template.prompt
+  return `${template.prompt.slice(0, replacement.start)}${replacementText}${template.prompt.slice(replacement.end)}`
+}
+
 /** 按生成日期筛选：today=当天，week=最近7天，month=最近30天，specific=指定区间(start~end，YYYY-MM-DD) */
 export function taskMatchesFilterDate(task: TaskRecord, filterDate: AppState['filterDate'], dateStart = '', dateEnd = '') {
   if (filterDate === 'all') return true
@@ -2432,12 +2486,12 @@ export async function initStore() {
         cacheImage(img.id, storedImage.dataUrl)
       }
     }
-    const shouldClearMask = Boolean(galleryInputDraft.maskDraft) && !restoredGalleryImages.some((img) => img.id === galleryInputDraft.maskDraft?.targetImageId)
+    const shouldClearMask = Boolean(galleryInputDraft.maskDraft) && !findMaskTargetImage(restoredGalleryImages, galleryInputDraft.maskDraft)
     const restoredGalleryDraft: AgentInputDraft = {
       ...galleryInputDraft,
       inputImages: restoredGalleryImages,
       prompt: remapImageMentionsForOrder(galleryInputDraft.prompt, galleryInputDraft.inputImages, restoredGalleryImages),
-      ...(shouldClearMask ? { maskDraft: null, maskEditorImageId: null } : {}),
+      ...(shouldClearMask ? { maskDraft: null, maskEditorImageId: null, maskEditorImageSlotId: null } : {}),
     }
     const galleryDraftsChanged =
       restoredGalleryImages.length !== galleryInputDraft.inputImages.length ||
@@ -2472,12 +2526,12 @@ export async function initStore() {
       }
     }
 
-    const shouldClearMask = Boolean(draft.maskDraft) && !restoredDraftImages.some((img) => img.id === draft.maskDraft?.targetImageId)
+    const shouldClearMask = Boolean(draft.maskDraft) && !findMaskTargetImage(restoredDraftImages, draft.maskDraft)
     const restoredDraft: AgentInputDraft = {
       ...draft,
       inputImages: restoredDraftImages,
       prompt: remapImageMentionsForOrder(draft.prompt, draft.inputImages, restoredDraftImages),
-      ...(shouldClearMask ? { maskDraft: null, maskEditorImageId: null } : {}),
+      ...(shouldClearMask ? { maskDraft: null, maskEditorImageId: null, maskEditorImageSlotId: null } : {}),
     }
     if (!isEmptyAgentInputDraft(restoredDraft)) restoredAgentInputDrafts[conversationId] = restoredDraft
     if (
@@ -2623,7 +2677,8 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
 
   if (maskDraft) {
     try {
-      orderedInputImages = orderInputImagesForMask(inputImages, maskDraft.targetImageId)
+      const slotOrderedInputImages = orderImagesWithMaskFirst(inputImages, maskDraft)
+      orderedInputImages = orderInputImagesForMask(slotOrderedInputImages, maskDraft.targetImageId)
       const coverage = await validateMaskMatchesImage(maskDraft.maskDataUrl, orderedInputImages[0].dataUrl)
       if (coverage === 'full' && !options.allowFullMask) {
         setConfirmDialog({
@@ -2641,7 +2696,7 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
       cacheImage(maskImageId, maskDraft.maskDataUrl)
       maskTargetImageId = maskDraft.targetImageId
     } catch (err) {
-      if (!inputImages.some((img) => img.id === maskDraft.targetImageId)) {
+      if (!findMaskTargetImage(inputImages, maskDraft)) {
         useStore.getState().clearMaskDraft()
       }
       showToast(err instanceof Error ? err.message : String(err), 'error')
@@ -2793,6 +2848,7 @@ export async function saveCurrentInputAsTemplate(opts: {
   replaceableIndex: number
   replaceableIndexes?: number[]
   coverIndex?: number
+  promptReplacement?: TemplatePromptReplacement | null
   name?: string
   color?: string
   collectionIds?: string[]
@@ -2836,6 +2892,9 @@ export async function saveCurrentInputAsTemplate(opts: {
     ? opts.coverIndex
     : replaceableIndexes[0]
   const coverImageId = inputImages[coverIndex]?.id ?? replaceableImageId
+  const promptReplacement = opts.promptReplacement
+    ? getTemplatePromptReplacement({ prompt: trimmedPrompt, templatePromptReplacement: opts.promptReplacement }) ?? undefined
+    : undefined
   const template: TaskRecord = {
     id: genId(),
     kind: 'template',
@@ -2844,6 +2903,7 @@ export async function saveCurrentInputAsTemplate(opts: {
     inputImageIds: inputImages.map((i) => i.id),
     templateReplaceImageIndex: replaceableIndexes[0],
     templateReplaceImageIndexes: replaceableIndexes,
+    templatePromptReplacement: promptReplacement,
     templateCoverImageId: coverImageId,
     templateCollectionId: opts.templateCollectionId || null,
     templateCollectionName: opts.templateCollectionId ? (opts.templateCollectionName?.trim() || undefined) : undefined,
@@ -2873,6 +2933,7 @@ export async function saveCurrentInputAsTemplate(opts: {
 export interface TemplateApplyImages {
   singleImageDataUrl?: string
   multiImageDataUrls?: string[]
+  promptReplacements?: Record<string, string>
 }
 
 export async function batchApplyTemplates(productImageDataUrlOrImages: string | TemplateApplyImages): Promise<boolean> {
@@ -2901,6 +2962,7 @@ export async function batchApplyTemplates(productImageDataUrlOrImages: string | 
     : productImageDataUrlOrImages
   const singleImageDataUrl = applyImages.singleImageDataUrl || applyImages.multiImageDataUrls?.[0] || ''
   const multiImageDataUrls = applyImages.multiImageDataUrls ?? (singleImageDataUrl ? [singleImageDataUrl] : [])
+  const promptReplacements = applyImages.promptReplacements ?? {}
   const imageIdByDataUrl = new Map<string, string>()
   const getReplacementImage = async (dataUrl: string): Promise<InputImage> => {
     let id = imageIdByDataUrl.get(dataUrl)
@@ -2947,7 +3009,7 @@ export async function batchApplyTemplates(productImageDataUrlOrImages: string | 
     }
 
     await createAndExecuteTaskFromInput({
-      prompt: template.prompt,
+      prompt: applyTemplatePromptReplacement(template, promptReplacements[template.id]),
       params: template.params,
       inputImages,
       activeProfile,
@@ -3777,13 +3839,14 @@ export async function submitAgentMessage() {
 
   if (maskDraft) {
     try {
-      orderedInputImages = orderInputImagesForMask(inputImages, maskDraft.targetImageId)
+      const slotOrderedInputImages = orderImagesWithMaskFirst(inputImages, maskDraft)
+      orderedInputImages = orderInputImagesForMask(slotOrderedInputImages, maskDraft.targetImageId)
       await validateMaskMatchesImage(maskDraft.maskDataUrl, orderedInputImages[0].dataUrl)
       maskImageId = await storeImage(maskDraft.maskDataUrl, 'mask')
       cacheImage(maskImageId, maskDraft.maskDataUrl)
       maskTargetImageId = maskDraft.targetImageId
     } catch (err) {
-      if (!inputImages.some((img) => img.id === maskDraft.targetImageId)) {
+      if (!findMaskTargetImage(inputImages, maskDraft)) {
         state.clearMaskDraft()
       }
       showToast(err instanceof Error ? err.message : String(err), 'error')
@@ -5084,6 +5147,7 @@ export async function renameTemplateCollection(collectionId: string, name: strin
 export interface TemplateCollectionInfo {
   id: string
   name: string
+  note?: string
   count: number
 }
 
@@ -5099,10 +5163,33 @@ export function getTemplateCollections(): TemplateCollectionInfo[] {
       existing.count++
       if (name) existing.name = name
     } else {
-      byId.set(t.templateCollectionId, { id: t.templateCollectionId, name: name || '导入的模板', count: 1 })
+      byId.set(t.templateCollectionId, { id: t.templateCollectionId, name: name || '导入的模板', note: t.templateCollectionNote?.trim() || undefined, count: 1 })
     }
+    if (existing && t.templateCollectionNote?.trim()) existing.note = t.templateCollectionNote.trim()
   }
   return Array.from(byId.values())
+}
+
+function getTemplateCollectionNoteFromTasks(tasks: TaskRecord[], collectionId: string | null): string | undefined {
+  return tasks.find((t) => t.kind === 'template' && (t.templateCollectionId || null) === collectionId && t.templateCollectionNote?.trim())
+    ?.templateCollectionNote?.trim()
+}
+
+export async function updateTemplateCollectionNote(collectionId: string | null, note: string) {
+  const trimmed = note.trim()
+  const { tasks, setTasks } = useStore.getState()
+  const changed: TaskRecord[] = []
+  const updated = tasks.map((t) => {
+    if (t.kind === 'template' && (t.templateCollectionId || null) === collectionId) {
+      const next = { ...t, templateCollectionNote: trimmed || undefined }
+      changed.push(next)
+      return next
+    }
+    return t
+  })
+  if (!changed.length) return
+  setTasks(updated)
+  for (const t of changed) await putTask(t)
 }
 
 /**
@@ -5114,6 +5201,7 @@ export async function moveTemplatesToCollection(templateIds: string[], collectio
   if (!ids.size) return
   const trimmedName = collectionName?.trim()
   const { tasks, setTasks } = useStore.getState()
+  const targetNote = getTemplateCollectionNoteFromTasks(tasks, collectionId)
   const changed: TaskRecord[] = []
   const updated = tasks.map((t) => {
     if (t.kind === 'template' && ids.has(t.id)) {
@@ -5121,6 +5209,7 @@ export async function moveTemplatesToCollection(templateIds: string[], collectio
         ...t,
         templateCollectionId: collectionId,
         templateCollectionName: collectionId ? (trimmedName || undefined) : undefined,
+        templateCollectionNote: targetNote || undefined,
       }
       changed.push(next)
       return next
@@ -5835,7 +5924,7 @@ export async function importData(file: File, options: ImportOptions = { importCo
 
     if (options.importConfig && data.settings) {
       const state = useStore.getState()
-      state.setSettings(mergeImportedSettings(state.settings, data.settings))
+      state.setSettings(replaceImportedApiSettings(state.settings, data.settings))
     }
 
     let msg = '数据已成功导入'
@@ -5887,17 +5976,20 @@ export async function exportTemplates(collectionIds?: Array<string | null>): Pro
     }
 
     const referencedImageIds = collectTemplateImageIds(templates)
-    const allImages = await getAllImages()
-    const images = allImages.filter((img) => referencedImageIds.has(img.id))
+    const images = []
+    for (const id of referencedImageIds) {
+      const image = await getImage(id)
+      if (image) images.push(image)
+    }
     const { settings } = useStore.getState()
     const exportedAt = Date.now()
     const thumbnailsByImageId = new Map<string, NonNullable<Awaited<ReturnType<typeof getImageThumbnail>>>>()
 
-    for (const img of images) {
-      const thumbnail = await getImageThumbnail(img.id)
+    for (const id of referencedImageIds) {
+      const thumbnail = await getImageThumbnail(id)
       if (thumbnail?.thumbnailDataUrl) {
-        thumbnailsByImageId.set(img.id, thumbnail)
-        cacheThumbnail(img.id, {
+        thumbnailsByImageId.set(id, thumbnail)
+        cacheThumbnail(id, {
           dataUrl: thumbnail.thumbnailDataUrl,
           width: thumbnail.width,
           height: thumbnail.height,
@@ -5937,7 +6029,7 @@ export async function exportTemplates(collectionIds?: Array<string | null>): Pro
     URL.revokeObjectURL(url)
     useStore.getState().showToast(`已导出 ${templates.length} 个模板`, 'success')
   } catch (e) {
-    useStore.getState().showToast(`导出模板失败：${e instanceof Error ? e.message : String(e)}`, 'error')
+    useStore.getState().showToast(`导出模板失败：${e instanceof Error ? e.message : String(e)}。可尝试按模板组分批导出。`, 'error')
   }
 }
 
@@ -5998,7 +6090,7 @@ async function importTemplatesFromFile(file: File): Promise<{ count: number; ima
 /**
  * 仅导入模板：支持一次选择多个 ZIP，每个 ZIP 各自归入一个独立文件夹。
  */
-export async function importTemplates(input: File | File[]): Promise<boolean> {
+export async function importTemplates(input: File | File[], onProgress?: (done: number, total: number) => void): Promise<boolean> {
   const fileList = Array.isArray(input) ? input : [input]
   if (!fileList.length) return false
   try {
@@ -6006,7 +6098,8 @@ export async function importTemplates(input: File | File[]): Promise<boolean> {
     let okZips = 0
     const allImageIds: string[] = []
     const failed: string[] = []
-    for (const file of fileList) {
+    for (let index = 0; index < fileList.length; index++) {
+      const file = fileList[index]
       try {
         const { count, imageIds } = await importTemplatesFromFile(file)
         if (count > 0) {
@@ -6018,6 +6111,8 @@ export async function importTemplates(input: File | File[]): Promise<boolean> {
         }
       } catch (e) {
         failed.push(`${file.name}（${e instanceof Error ? e.message : String(e)}）`)
+      } finally {
+        onProgress?.(index + 1, fileList.length)
       }
     }
 
@@ -6094,7 +6189,7 @@ export async function createInputImageFromFile(file: File): Promise<InputImage |
   const dataUrl = await fileToDataUrl(file)
   const id = await storeImage(dataUrl, 'upload')
   cacheImage(id, dataUrl)
-  return { id, dataUrl }
+  return withInputSlot({ id, dataUrl })
 }
 
 /** 添加图片到输入（右键菜单）—— 支持 data/blob/http URL */
@@ -6105,6 +6200,6 @@ export async function addImageFromUrl(src: string): Promise<void> {
   const dataUrl = await blobToDataUrl(blob)
   const id = await storeImage(dataUrl, 'upload')
   cacheImage(id, dataUrl)
-  useStore.getState().addInputImage({ id, dataUrl })
+  useStore.getState().addInputImage(withInputSlot({ id, dataUrl }))
 }
 

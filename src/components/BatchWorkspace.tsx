@@ -9,7 +9,17 @@ import SizePickerModal from './SizePickerModal'
 interface BatchDraftTask {
   id: string
   prompt: string
-  images: InputImage[]
+  images: BatchDraftImage[]
+}
+
+interface BatchDraftImage extends InputImage {
+  draftKey: string
+}
+
+interface UploadProgress {
+  title: string
+  total: number
+  done: number
 }
 
 const REFERENCE_IMAGE_LABELS = ['图一', '图二', '图三', '图四', '图五', '图六', '图七', '图八', '图九']
@@ -26,16 +36,30 @@ function getImageFiles(files: FileList | File[]) {
   return Array.from(files).filter((file) => file.type.startsWith('image/'))
 }
 
-async function filesToInputImages(files: FileList | File[]) {
-  const images: InputImage[] = []
-  for (const file of getImageFiles(files)) {
+function toDraftImage(image: InputImage): BatchDraftImage {
+  return { ...image, draftKey: newDraftId() }
+}
+
+function waitForBrowserPaint() {
+  return new Promise<void>((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+  })
+}
+
+async function filesToInputImages(files: FileList | File[], onProgress?: (done: number, total: number) => void) {
+  const imageFiles = getImageFiles(files)
+  const images: BatchDraftImage[] = []
+  for (let index = 0; index < imageFiles.length; index++) {
+    const file = imageFiles[index]
     const image = await createInputImageFromFile(file)
-    if (image) images.push(image)
+    if (image) images.push(toDraftImage(image))
+    onProgress?.(index + 1, imageFiles.length)
+    await waitForBrowserPaint()
   }
   return images
 }
 
-function imagesToDraftTasks(images: InputImage[]): BatchDraftTask[] {
+function imagesToDraftTasks(images: BatchDraftImage[]): BatchDraftTask[] {
   return images.map((image) => ({
     id: newDraftId(),
     prompt: '',
@@ -65,11 +89,12 @@ export default function BatchWorkspace() {
   const params = useStore((s) => s.params)
   const tasksInStore = useStore((s) => s.tasks)
   const [commonPrompt, setCommonPrompt] = useState('')
-  const [commonImages, setCommonImages] = useState<InputImage[]>([])
+  const [commonImages, setCommonImages] = useState<BatchDraftImage[]>([])
   const [batchParams, setBatchParams] = useState<TaskParams>(() => ({ ...params, moderation: 'auto', transparent_output: false }))
   const [showSizePicker, setShowSizePicker] = useState(false)
   const [submitting, setSubmitting] = useState(false)
-  const [dragActive, setDragActive] = useState(false)
+  const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null)
+  const [dragTarget, setDragTarget] = useState<'common' | 'tasks' | null>(null)
   const pasteTargetRef = useRef<'common' | 'tasks'>('tasks')
   const [draftTasks, setDraftTasks] = useState<BatchDraftTask[]>([
     { id: newDraftId(), prompt: '', images: [] },
@@ -110,47 +135,89 @@ export default function BatchWorkspace() {
     setSettings({ activeProfileId: profileId })
   }
 
-  const removeImage = async (image: InputImage, onAfter: () => void) => {
-    onAfter()
-    await deleteImageIfUnreferenced(image.id)
-  }
-
   const updateTask = (id: string, patch: Partial<BatchDraftTask>) => {
     setDraftTasks((items) => items.map((item) => item.id === id ? { ...item, ...patch } : item))
+  }
+
+  const updateTaskImages = (id: string, updater: (images: BatchDraftImage[]) => BatchDraftImage[]) => {
+    setDraftTasks((items) => items.map((item) => item.id === id ? { ...item, images: updater(item.images) } : item))
+  }
+
+  const hasOtherDraftReference = (image: BatchDraftImage, removedDraftKeys: Set<string>) => (
+    commonImages.some((item) => item.id === image.id && !removedDraftKeys.has(item.draftKey)) ||
+    draftTasks.some((task) => task.images.some((item) => item.id === image.id && !removedDraftKeys.has(item.draftKey)))
+  )
+
+  const cleanupRemovedDraftImages = async (images: BatchDraftImage[]) => {
+    const removedKeys = new Set(images.map((image) => image.draftKey))
+    const idsToClean = new Set<string>()
+    for (const image of images) {
+      if (!hasOtherDraftReference(image, removedKeys)) idsToClean.add(image.id)
+    }
+    for (const id of idsToClean) await deleteImageIfUnreferenced(id)
+  }
+
+  const removeCommonImage = (image: BatchDraftImage) => {
+    setCommonImages((items) => items.filter((item) => item.draftKey !== image.draftKey))
+    void cleanupRemovedDraftImages([image])
+  }
+
+  const removeTaskImage = (taskId: string, image: BatchDraftImage) => {
+    updateTaskImages(taskId, (images) => images.filter((item) => item.draftKey !== image.draftKey))
+    void cleanupRemovedDraftImages([image])
   }
 
   const removeTask = async (id: string) => {
     const task = draftTasks.find((item) => item.id === id)
     setDraftTasks((items) => items.length === 1 ? [{ id: newDraftId(), prompt: '', images: [] }] : items.filter((item) => item.id !== id))
-    if (task) {
-      for (const image of task.images) await deleteImageIfUnreferenced(image.id)
+    if (task) await cleanupRemovedDraftImages(task.images)
+  }
+
+  const clearAllTasks = async () => {
+    const images = draftTasks.flatMap((task) => task.images)
+    setDraftTasks([{ id: newDraftId(), prompt: '', images: [] }])
+    if (images.length) await cleanupRemovedDraftImages(images)
+  }
+
+  const runImageUpload = async <T,>(title: string, files: FileList | File[] | null, task: (files: File[]) => Promise<T>) => {
+    const imageFiles = files ? getImageFiles(files) : []
+    if (!imageFiles.length) return null
+    setUploadProgress({ title, total: imageFiles.length, done: 0 })
+    await waitForBrowserPaint()
+    try {
+      return await task(imageFiles)
+    } finally {
+      setUploadProgress(null)
     }
   }
 
   const handleCommonImageFiles = async (files: FileList | File[] | null) => {
-    if (!files?.length) return
-    const images = await filesToInputImages(files)
-    if (!images.length) return
-    setCommonImages((items) => [...items, ...images])
+    await runImageUpload('正在导入通用参考图', files, async (imageFiles) => {
+      const images = await filesToInputImages(imageFiles, (done, total) => setUploadProgress({ title: '正在导入通用参考图', total, done }))
+      if (!images.length) return
+      setCommonImages((items) => [...items, ...images])
+    })
   }
 
-  const handleTaskImageFiles = async (taskId: string, files: FileList | null) => {
-    if (!files?.length) return
-    const images = await filesToInputImages(files)
-    if (!images.length) return
-    setDraftTasks((items) => items.map((item) =>
-      item.id === taskId ? { ...item, images: [...item.images, ...images] } : item,
-    ))
+  const handleTaskImageFiles = async (taskId: string, files: FileList | File[] | null) => {
+    await runImageUpload('正在导入任务参考图', files, async (imageFiles) => {
+      const images = await filesToInputImages(imageFiles, (done, total) => setUploadProgress({ title: '正在导入任务参考图', total, done }))
+      if (!images.length) return
+      setDraftTasks((items) => items.map((item) =>
+        item.id === taskId ? { ...item, images: [...item.images, ...images] } : item,
+      ))
+    })
   }
 
   const appendImageTasks = async (files: FileList | File[] | null) => {
-    if (!files?.length) return
-    const images = await filesToInputImages(files)
-    if (!images.length) return
-    const nextTasks = imagesToDraftTasks(images)
-    setDraftTasks((items) => {
-      const hasOnlyEmptyTask = items.length === 1 && !items[0].prompt.trim() && !items[0].images.length
-      return hasOnlyEmptyTask ? nextTasks : [...items, ...nextTasks]
+    await runImageUpload('正在按图片创建任务', files, async (imageFiles) => {
+      const images = await filesToInputImages(imageFiles, (done, total) => setUploadProgress({ title: '正在按图片创建任务', total, done }))
+      if (!images.length) return
+      const nextTasks = imagesToDraftTasks(images)
+      setDraftTasks((items) => {
+        const hasOnlyEmptyTask = items.length === 1 && !items[0].prompt.trim() && !items[0].images.length
+        return hasOnlyEmptyTask ? nextTasks : [...items, ...nextTasks]
+      })
     })
   }
 
@@ -173,9 +240,45 @@ export default function BatchWorkspace() {
     return () => document.removeEventListener('paste', handlePaste)
   }, [])
 
-  const handleDrop = (event: React.DragEvent<HTMLElement>) => {
+  const handleAreaDragEnter = (event: React.DragEvent<HTMLElement>, target: 'common' | 'tasks') => {
+    if (!event.dataTransfer.types.includes('Files')) return
     event.preventDefault()
-    setDragActive(false)
+    event.stopPropagation()
+    event.dataTransfer.dropEffect = 'copy'
+    markPasteTarget(target)
+    setDragTarget(target)
+  }
+
+  const handleAreaDragOver = (event: React.DragEvent<HTMLElement>, target: 'common' | 'tasks') => {
+    if (!event.dataTransfer.types.includes('Files')) return
+    event.preventDefault()
+    event.stopPropagation()
+    event.dataTransfer.dropEffect = 'copy'
+    markPasteTarget(target)
+    if (dragTarget !== target) setDragTarget(target)
+  }
+
+  const handleAreaDragLeave = (event: React.DragEvent<HTMLElement>) => {
+    const nextTarget = event.relatedTarget as Node | null
+    if (nextTarget && event.currentTarget.contains(nextTarget)) return
+    setDragTarget(null)
+  }
+
+  const handleCommonDrop = (event: React.DragEvent<HTMLElement>) => {
+    if (!event.dataTransfer.types.includes('Files')) return
+    event.preventDefault()
+    event.stopPropagation()
+    setDragTarget(null)
+    markPasteTarget('common')
+    void handleCommonImageFiles(event.dataTransfer.files)
+  }
+
+  const handleTasksDrop = (event: React.DragEvent<HTMLElement>) => {
+    if (!event.dataTransfer.types.includes('Files')) return
+    event.preventDefault()
+    event.stopPropagation()
+    setDragTarget(null)
+    markPasteTarget('tasks')
     void appendImageTasks(event.dataTransfer.files)
   }
 
@@ -201,16 +304,19 @@ export default function BatchWorkspace() {
     <main
       className="safe-area-x mx-auto max-w-7xl pb-16 pt-4"
       onDragEnter={(e) => {
-        if (getImageFiles(e.dataTransfer.files).length > 0) setDragActive(true)
+        if (e.dataTransfer.types.includes('Files')) setDragTarget(pasteTargetRef.current)
       }}
       onDragOver={(e) => {
+        if (!e.dataTransfer.types.includes('Files')) return
         e.preventDefault()
-        if (!dragActive) setDragActive(true)
+        e.dataTransfer.dropEffect = 'copy'
+        if (!dragTarget) setDragTarget(pasteTargetRef.current)
       }}
       onDragLeave={(e) => {
-        if (e.currentTarget === e.target) setDragActive(false)
+        const nextTarget = e.relatedTarget as Node | null
+        if (!nextTarget || !e.currentTarget.contains(nextTarget)) setDragTarget(null)
       }}
-      onDrop={handleDrop}
+      onDrop={handleTasksDrop}
     >
       <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
@@ -219,10 +325,31 @@ export default function BatchWorkspace() {
         </div>
       </div>
 
-      {dragActive && (
+      {dragTarget && (
         <div className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center bg-blue-500/10 backdrop-blur-[1px]">
           <div className="rounded-xl border border-blue-400 bg-white px-5 py-3 text-sm font-medium text-blue-700 shadow-lg dark:bg-gray-900 dark:text-blue-200">
-            松开后按图片数量创建任务卡
+            {dragTarget === 'common' ? '松开后添加到通用参考图' : '松开后按图片数量创建任务卡'}
+          </div>
+        </div>
+      )}
+
+      {uploadProgress && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-gray-950/35 backdrop-blur-sm">
+          <div className="w-[min(340px,calc(100vw-32px))] rounded-xl border border-gray-200 bg-white p-5 text-center shadow-2xl dark:border-white/[0.08] dark:bg-gray-900">
+            <svg className="mx-auto mb-3 h-8 w-8 animate-spin text-blue-500" fill="none" viewBox="0 0 24 24">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+            </svg>
+            <div className="text-sm font-semibold text-gray-900 dark:text-gray-100">{uploadProgress.title}</div>
+            <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {uploadProgress.done}/{uploadProgress.total} 张图片已处理
+            </div>
+            <div className="mt-4 h-2 overflow-hidden rounded-full bg-gray-100 dark:bg-white/[0.08]">
+              <div
+                className="h-full rounded-full bg-blue-500 transition-all"
+                style={{ width: `${Math.max(5, Math.round((uploadProgress.done / Math.max(1, uploadProgress.total)) * 100))}%` }}
+              />
+            </div>
           </div>
         </div>
       )}
@@ -234,6 +361,10 @@ export default function BatchWorkspace() {
           onMouseEnter={() => markPasteTarget('common')}
           onPointerDown={() => markPasteTarget('common')}
           onFocusCapture={() => markPasteTarget('common')}
+          onDragEnter={(e) => handleAreaDragEnter(e, 'common')}
+          onDragOver={(e) => handleAreaDragOver(e, 'common')}
+          onDragLeave={handleAreaDragLeave}
+          onDrop={handleCommonDrop}
         >
           <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm dark:border-white/[0.08] dark:bg-gray-900">
             <div className="mb-3 flex items-center justify-between gap-3">
@@ -254,11 +385,21 @@ export default function BatchWorkspace() {
               <span className="mb-2 block text-xs text-gray-500 dark:text-gray-400">通用参考图（图一）</span>
               <div className="flex flex-wrap items-center gap-2">
                 {commonImages.map((image) => (
-                  <ImageThumb key={image.id} image={image} onRemove={() => void removeImage(image, () => setCommonImages((items) => items.filter((item) => item.id !== image.id)))} />
+                  <ImageThumb key={image.draftKey} image={image} onRemove={() => removeCommonImage(image)} />
                 ))}
                 <label data-tour="batch-common-upload" className="flex h-16 w-16 cursor-pointer items-center justify-center rounded-lg border border-dashed border-gray-300 text-gray-400 transition hover:bg-gray-50 dark:border-white/[0.12] dark:hover:bg-white/[0.04]">
                   <PlusIcon className="h-5 w-5" />
-                  <input type="file" accept="image/*" multiple className="hidden" onChange={(e) => void handleCommonImageFiles(e.target.files)} />
+                  <input
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    className="hidden"
+                    onChange={(e) => {
+                      const files = Array.from(e.currentTarget.files ?? [])
+                      e.currentTarget.value = ''
+                      void handleCommonImageFiles(files)
+                    }}
+                  />
                 </label>
                 <p className="min-w-[150px] flex-1 text-xs leading-5 text-gray-500 dark:text-gray-400">
                   提交时会统一排在每个任务的参考图最前面。
@@ -361,6 +502,10 @@ export default function BatchWorkspace() {
           onMouseEnter={() => markPasteTarget('tasks')}
           onPointerDown={() => markPasteTarget('tasks')}
           onFocusCapture={() => markPasteTarget('tasks')}
+          onDragEnter={(e) => handleAreaDragEnter(e, 'tasks')}
+          onDragOver={(e) => handleAreaDragOver(e, 'tasks')}
+          onDragLeave={handleAreaDragLeave}
+          onDrop={handleTasksDrop}
         >
           <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm dark:border-white/[0.08] dark:bg-gray-900">
             <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -368,10 +513,30 @@ export default function BatchWorkspace() {
                 <h3 className="text-sm font-semibold text-gray-800 dark:text-gray-100">任务列表</h3>
                 <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">{readyTaskCount} 个可提交任务</p>
               </div>
-              <label data-tour="batch-split-upload" className="cursor-pointer rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-600 transition hover:bg-gray-50 dark:border-white/[0.08] dark:text-gray-300 dark:hover:bg-white/[0.04]">
-                多任务拆图
-                <input type="file" accept="image/*" multiple className="hidden" onChange={(e) => void appendImageTasks(e.target.files)} />
-              </label>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => void clearAllTasks()}
+                  disabled={draftTasks.length === 1 && !draftTasks[0].prompt.trim() && !draftTasks[0].images.length}
+                  className="rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-600 transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-45 dark:border-white/[0.08] dark:text-gray-300 dark:hover:bg-white/[0.04]"
+                >
+                  清空全部任务
+                </button>
+                <label data-tour="batch-split-upload" className="cursor-pointer rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-600 transition hover:bg-gray-50 dark:border-white/[0.08] dark:text-gray-300 dark:hover:bg-white/[0.04]">
+                  多任务拆图
+                  <input
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    className="hidden"
+                    onChange={(e) => {
+                      const files = Array.from(e.currentTarget.files ?? [])
+                      e.currentTarget.value = ''
+                      void appendImageTasks(files)
+                    }}
+                  />
+                </label>
+              </div>
             </div>
 
             <div data-tour="batch-dropzone" className="mb-4 rounded-lg border border-dashed border-gray-300 bg-gray-50 px-4 py-5 text-center text-sm text-gray-500 dark:border-white/[0.12] dark:bg-white/[0.03] dark:text-gray-400">
@@ -408,14 +573,24 @@ export default function BatchWorkspace() {
                     ))}
                     {task.images.map((image) => (
                       <ImageThumb
-                        key={image.id}
+                        key={image.draftKey}
                         image={image}
-                        onRemove={() => void removeImage(image, () => updateTask(task.id, { images: task.images.filter((item) => item.id !== image.id) }))}
+                        onRemove={() => removeTaskImage(task.id, image)}
                       />
                     ))}
                     <label className="flex h-16 w-16 cursor-pointer items-center justify-center rounded-lg border border-dashed border-gray-300 text-gray-400 transition hover:bg-gray-50 dark:border-white/[0.12] dark:hover:bg-white/[0.04]">
                       <PlusIcon className="h-5 w-5" />
-                      <input type="file" accept="image/*" multiple className="hidden" onChange={(e) => void handleTaskImageFiles(task.id, e.target.files)} />
+                      <input
+                        type="file"
+                        accept="image/*"
+                        multiple
+                        className="hidden"
+                        onChange={(e) => {
+                          const files = Array.from(e.currentTarget.files ?? [])
+                          e.currentTarget.value = ''
+                          void handleTaskImageFiles(task.id, files)
+                        }}
+                      />
                     </label>
                   </div>
                 </div>

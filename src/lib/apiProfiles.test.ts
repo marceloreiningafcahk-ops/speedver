@@ -13,6 +13,7 @@ import {
   importCustomProviderSettingsFromJson,
   mergeImportedSettings,
   normalizeSettings,
+  replaceImportedApiSettings,
   switchApiProfileProvider,
   validateApiProfile,
 } from './apiProfiles'
@@ -380,6 +381,69 @@ describe('mergeImportedSettings', () => {
       apiKey: 'custom-key',
       model: 'custom-model',
     })
+  })
+})
+
+describe('replaceImportedApiSettings', () => {
+  it('replaces all existing API profiles while preserving non-API preferences', () => {
+    const current = normalizeSettings({
+      ...DEFAULT_SETTINGS,
+      clearInputAfterSubmit: true,
+      persistInputOnRestart: false,
+      profiles: [
+        createDefaultOpenAIProfile({ id: 'old-openai', apiKey: 'old-key' }),
+        createDefaultFalProfile({ id: 'old-fal', apiKey: 'old-fal-key' }),
+      ],
+      activeProfileId: 'old-openai',
+    })
+
+    const replaced = replaceImportedApiSettings(current, {
+      profiles: [
+        createDefaultOpenAIProfile({ id: 'new-openai', apiKey: 'new-key', model: 'new-model' }),
+      ],
+      activeProfileId: 'new-openai',
+    })
+
+    expect(replaced.profiles.map((profile) => profile.id)).toEqual(['new-openai'])
+    expect(replaced.activeProfileId).toBe('new-openai')
+    expect(replaced.profiles[0]).toMatchObject({ apiKey: 'new-key', model: 'new-model' })
+    expect(replaced.clearInputAfterSubmit).toBe(true)
+    expect(replaced.persistInputOnRestart).toBe(false)
+  })
+
+  it('replaces custom providers and dependent profile ids from the imported settings', () => {
+    const replaced = replaceImportedApiSettings(DEFAULT_SETTINGS, {
+      customProviders: [{
+        id: 'custom-imported',
+        name: 'Imported Custom',
+        submit: {
+          path: 'images',
+          method: 'POST',
+          contentType: 'json',
+          body: { prompt: '$prompt' },
+          result: { imageUrlPaths: ['data.url'] },
+        },
+      }],
+      profiles: [{
+        id: 'custom-profile',
+        name: 'Custom Profile',
+        provider: 'custom-imported',
+        baseUrl: 'https://custom.example.com',
+        apiKey: 'custom-key',
+        model: 'custom-model',
+        timeout: 300,
+        apiMode: 'images',
+        codexCli: false,
+        apiProxy: false,
+      }],
+      activeProfileId: 'custom-profile',
+      templateApiProfileId: 'custom-profile',
+    })
+
+    expect(replaced.customProviders.map((provider) => provider.id)).toEqual(['custom-imported'])
+    expect(replaced.profiles).toHaveLength(1)
+    expect(replaced.profiles[0].provider).toBe('custom-imported')
+    expect(replaced.templateApiProfileId).toBe('custom-profile')
   })
 })
 

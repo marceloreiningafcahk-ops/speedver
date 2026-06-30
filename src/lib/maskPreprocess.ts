@@ -84,20 +84,22 @@ export function replaceMaskTargetImage(
   inputImages: InputImage[],
   targetImageId: string,
   workingImage: InputImage,
+  targetSlotId?: string | null,
 ): InputImage[] {
   const nextImages: InputImage[] = []
   let inserted = false
 
   for (const image of inputImages) {
-    if (image.id === targetImageId) {
+    const isTarget = targetSlotId ? image.slotId === targetSlotId : image.id === targetImageId
+    if (isTarget) {
       if (!inserted) {
-        nextImages.push(workingImage)
+        nextImages.push({ ...workingImage, slotId: image.slotId })
         inserted = true
       }
       continue
     }
 
-    if (image.id === workingImage.id) {
+    if (!targetSlotId && image.id === workingImage.id) {
       if (!inserted) {
         nextImages.push(workingImage)
         inserted = true
@@ -108,5 +110,5 @@ export function replaceMaskTargetImage(
     nextImages.push(image)
   }
 
-  return inserted ? nextImages : [workingImage, ...nextImages]
+  return inserted ? nextImages : [{ ...workingImage, slotId: targetSlotId || workingImage.slotId }, ...nextImages]
 }
