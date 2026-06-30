@@ -132,7 +132,8 @@
   1. `npm run build` 生成最新 `dist/`。
   2. 用 EdgeOne CLI 部署 `dist/` 静态产物到项目 `image-playground`。
   3. 当前可用命令：`npx edgeone makers deploy ./dist --name image-playground --env production --json`。
-- **最近一次部署**：2026-06-30，Production，Deployment ID `dpis32jsrfov`，Project ID `makers-ooaiz1b6xhvz`。
+- **最近一次部署**：2026-06-30，Production，Deployment ID `dpqdqy3b3ep4`，Project ID `makers-ooaiz1b6xhvz`。
+- **安全记录**：2026-06-30 已在提交 `e5b72bb` 移除 `vite.config.ts` 里误打包的本地默认 API 配置；当前 HEAD 与最新构建产物已扫描无真实 `sk-...` / EdgeOne 查询 token 命中。因密钥曾进入 Git 历史和旧部署包，相关 API Key 仍需在服务商后台轮换。
 - **其他部署方式**（备选，见仓库）：Cloudflare（`wrangler.jsonc` + `npm run deploy:cf`）、Docker（`deploy/Dockerfile` + `nginx.conf`）、Vercel（`vercel.json`）。
 
 ## 7. 代码风格红线（详见 AGENTS.md）
