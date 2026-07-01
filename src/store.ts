@@ -1968,22 +1968,57 @@ export function getTemplateApplyUploadPlan(templates: Array<Pick<TaskRecord, 'in
   }
 }
 
-export function getTemplatePromptReplacement(template: Pick<TaskRecord, 'prompt' | 'templatePromptReplacement'>): TemplatePromptReplacement | null {
-  const replacement = template.templatePromptReplacement
-  if (!replacement) return null
+function normalizeTemplatePromptReplacement(prompt: string, replacement: unknown): TemplatePromptReplacement | null {
+  if (!isRecord(replacement)) return null
   const start = Math.trunc(Number(replacement.start))
   const end = Math.trunc(Number(replacement.end))
-  if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end <= start || end > template.prompt.length) return null
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end <= start || end > prompt.length) return null
   const originalText = typeof replacement.originalText === 'string' ? replacement.originalText : ''
-  if (!originalText || template.prompt.slice(start, end) !== originalText) return null
+  if (!originalText || prompt.slice(start, end) !== originalText) return null
   return { start, end, originalText }
 }
 
-export function applyTemplatePromptReplacement(template: Pick<TaskRecord, 'prompt' | 'templatePromptReplacement'>, replacementText?: string): string {
-  const replacement = getTemplatePromptReplacement(template)
-  if (!replacement) return template.prompt
-  if (!replacementText?.trim()) return template.prompt
-  return `${template.prompt.slice(0, replacement.start)}${replacementText}${template.prompt.slice(replacement.end)}`
+export function getTemplatePromptReplacements(template: Pick<TaskRecord, 'prompt' | 'templatePromptReplacement' | 'templatePromptReplacements'>): TemplatePromptReplacement[] {
+  const source = Array.isArray(template.templatePromptReplacements) && template.templatePromptReplacements.length
+    ? template.templatePromptReplacements
+    : template.templatePromptReplacement
+    ? [template.templatePromptReplacement]
+    : []
+  const replacements = source
+    .map((replacement) => normalizeTemplatePromptReplacement(template.prompt, replacement))
+    .filter((replacement): replacement is TemplatePromptReplacement => Boolean(replacement))
+    .sort((a, b) => a.start - b.start || a.end - b.end)
+  const result: TemplatePromptReplacement[] = []
+  for (const replacement of replacements) {
+    const previous = result[result.length - 1]
+    if (!previous || replacement.start >= previous.end) result.push(replacement)
+  }
+  return result
+}
+
+export function getTemplatePromptReplacement(template: Pick<TaskRecord, 'prompt' | 'templatePromptReplacement' | 'templatePromptReplacements'>): TemplatePromptReplacement | null {
+  return getTemplatePromptReplacements(template)[0] ?? null
+}
+
+export function applyTemplatePromptReplacements(template: Pick<TaskRecord, 'prompt' | 'templatePromptReplacement' | 'templatePromptReplacements'>, replacementTexts?: string[]): string {
+  const replacements = getTemplatePromptReplacements(template)
+  if (!replacements.length) return template.prompt
+  let prompt = template.prompt
+  for (let index = replacements.length - 1; index >= 0; index--) {
+    const replacementText = replacementTexts?.[index]
+    if (!replacementText?.trim()) continue
+    const replacement = replacements[index]
+    prompt = `${prompt.slice(0, replacement.start)}${replacementText}${prompt.slice(replacement.end)}`
+  }
+  return prompt
+}
+
+export function applyTemplatePromptReplacement(template: Pick<TaskRecord, 'prompt' | 'templatePromptReplacement' | 'templatePromptReplacements'>, replacementText?: string): string {
+  return applyTemplatePromptReplacements(template, [replacementText ?? ''])
+}
+
+export function getLegacyTemplatePromptReplacement(template: Pick<TaskRecord, 'prompt' | 'templatePromptReplacement' | 'templatePromptReplacements'>): TemplatePromptReplacement | undefined {
+  return getTemplatePromptReplacements(template)[0] ?? undefined
 }
 
 /** 按生成日期筛选：today=当天，week=最近7天，month=最近30天，specific=指定区间(start~end，YYYY-MM-DD) */
@@ -2849,6 +2884,7 @@ export async function saveCurrentInputAsTemplate(opts: {
   replaceableIndexes?: number[]
   coverIndex?: number
   promptReplacement?: TemplatePromptReplacement | null
+  promptReplacements?: TemplatePromptReplacement[]
   name?: string
   color?: string
   collectionIds?: string[]
@@ -2892,9 +2928,11 @@ export async function saveCurrentInputAsTemplate(opts: {
     ? opts.coverIndex
     : replaceableIndexes[0]
   const coverImageId = inputImages[coverIndex]?.id ?? replaceableImageId
-  const promptReplacement = opts.promptReplacement
-    ? getTemplatePromptReplacement({ prompt: trimmedPrompt, templatePromptReplacement: opts.promptReplacement }) ?? undefined
-    : undefined
+  const promptReplacements = getTemplatePromptReplacements({
+    prompt: trimmedPrompt,
+    templatePromptReplacement: opts.promptReplacement ?? undefined,
+    templatePromptReplacements: opts.promptReplacements,
+  })
   const template: TaskRecord = {
     id: genId(),
     kind: 'template',
@@ -2903,7 +2941,8 @@ export async function saveCurrentInputAsTemplate(opts: {
     inputImageIds: inputImages.map((i) => i.id),
     templateReplaceImageIndex: replaceableIndexes[0],
     templateReplaceImageIndexes: replaceableIndexes,
-    templatePromptReplacement: promptReplacement,
+    templatePromptReplacement: promptReplacements[0],
+    templatePromptReplacements: promptReplacements.length ? promptReplacements : undefined,
     templateCoverImageId: coverImageId,
     templateCollectionId: opts.templateCollectionId || null,
     templateCollectionName: opts.templateCollectionId ? (opts.templateCollectionName?.trim() || undefined) : undefined,
@@ -2933,7 +2972,7 @@ export async function saveCurrentInputAsTemplate(opts: {
 export interface TemplateApplyImages {
   singleImageDataUrl?: string
   multiImageDataUrls?: string[]
-  promptReplacements?: Record<string, string>
+  promptReplacements?: Record<string, string | string[]>
 }
 
 export async function batchApplyTemplates(productImageDataUrlOrImages: string | TemplateApplyImages): Promise<boolean> {
@@ -3008,8 +3047,11 @@ export async function batchApplyTemplates(productImageDataUrlOrImages: string | 
       continue
     }
 
+    const promptReplacementValue = promptReplacements[template.id]
     await createAndExecuteTaskFromInput({
-      prompt: applyTemplatePromptReplacement(template, promptReplacements[template.id]),
+      prompt: Array.isArray(promptReplacementValue)
+        ? applyTemplatePromptReplacements(template, promptReplacementValue)
+        : applyTemplatePromptReplacement(template, promptReplacementValue),
       params: template.params,
       inputImages,
       activeProfile,

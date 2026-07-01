@@ -235,8 +235,10 @@ export interface TaskRecord {
   templateCoverImageId?: string | null
   templateReplaceImageIndex?: number
   templateReplaceImageIndexes?: number[]
-  /** 模板提示词中允许套用时替换的一段文本 */
+  /** 模板提示词中允许套用时替换的一段文本，保留兼容旧模板 */
   templatePromptReplacement?: TemplatePromptReplacement
+  /** 模板提示词中允许套用时替换的多段文本 */
+  templatePromptReplacements?: TemplatePromptReplacement[]
   /** 模板所属文件夹（模板集合）ID；导入的模板归入各自独立文件夹 */
   templateCollectionId?: string | null
   /** 模板文件夹显示名（一般为导入 ZIP 的文件名） */

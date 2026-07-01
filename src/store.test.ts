@@ -131,7 +131,7 @@ import { clearAgentConversations, clearImages, clearTasks, getAllAgentConversati
 import { callAgentResponsesApi, callBatchImageSingle } from './lib/agentApi'
 import { getFalQueuedImageResult } from './lib/falAiImageApi'
 import { removeKeyedBackgroundFromDataUrl } from './lib/transparentImage'
-import { applyTemplatePromptReplacement, cleanStaleAgentInputDrafts, clearFailedTasks, deleteAgentRoundFromConversation, deleteFavoriteCollection, editOutputs, getActiveAgentRounds, getErrorToastMessage, getPersistedState, getTaskApiProfile, getTemplateApplyUploadPlan, getTemplatePromptReplacement, getTemplateReplaceImageIndexes, importData, initStore, markInterruptedOpenAIRunningTasks, migratePersistedState, regenerateAgentAssistantMessage, remapAgentRoundMentionsForPathChange, removeTask, reuseConfig, submitAgentMessage, submitTask, taskMatchesFilterSourceMode, taskMatchesFilterStatus, taskMatchesSearchQuery, updateTemplateCollectionNote, useStore } from './store'
+import { applyTemplatePromptReplacement, applyTemplatePromptReplacements, cleanStaleAgentInputDrafts, clearFailedTasks, deleteAgentRoundFromConversation, deleteFavoriteCollection, editOutputs, getActiveAgentRounds, getErrorToastMessage, getPersistedState, getTaskApiProfile, getTemplateApplyUploadPlan, getTemplatePromptReplacement, getTemplatePromptReplacements, getTemplateReplaceImageIndexes, importData, initStore, markInterruptedOpenAIRunningTasks, migratePersistedState, regenerateAgentAssistantMessage, remapAgentRoundMentionsForPathChange, removeTask, reuseConfig, submitAgentMessage, submitTask, taskMatchesFilterSourceMode, taskMatchesFilterStatus, taskMatchesSearchQuery, updateTemplateCollectionNote, useStore } from './store'
 
 const imageA = { id: 'image-a', dataUrl: 'data:image/png;base64,a' }
 const imageB = { id: 'image-b', dataUrl: 'data:image/png;base64,b' }
@@ -1789,6 +1789,26 @@ describe('agent context for removed outputs', () => {
     expect(getTemplatePromptReplacement(template)).toEqual({ start: 1, end: 5, originalText: '红色杯子' })
     expect(applyTemplatePromptReplacement(template, '')).toBe(template.prompt)
     expect(applyTemplatePromptReplacement(template, '蓝色鞋子')).toBe('把蓝色鞋子放在海边桌面上')
+  })
+
+  it('applies multiple template prompt replacements at their original positions', () => {
+    const template = task({
+      prompt: '把红色杯子放在海边桌面上，背景是夏天',
+      templatePromptReplacements: [
+        { start: 1, end: 5, originalText: '红色杯子' },
+        { start: 7, end: 11, originalText: '海边桌面' },
+        { start: 16, end: 18, originalText: '夏天' },
+      ],
+    })
+
+    expect(getTemplatePromptReplacements(template)).toEqual([
+      { start: 1, end: 5, originalText: '红色杯子' },
+      { start: 7, end: 11, originalText: '海边桌面' },
+      { start: 16, end: 18, originalText: '夏天' },
+    ])
+    expect(applyTemplatePromptReplacements(template, ['蓝色鞋子', '木质地板', '冬天'])).toBe('把蓝色鞋子放在木质地板上，背景是冬天')
+    expect(applyTemplatePromptReplacements(template, ['蓝色鞋子', '', '冬天'])).toBe('把蓝色鞋子放在海边桌面上，背景是冬天')
+    expect(template.prompt).toBe('把红色杯子放在海边桌面上，背景是夏天')
   })
 
   it('ignores stale template prompt replacement ranges after the prompt changes', () => {

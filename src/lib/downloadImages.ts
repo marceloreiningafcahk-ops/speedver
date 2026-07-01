@@ -38,7 +38,7 @@ export async function downloadImageIds(imageIds: string[], fileNameBase = 'image
       const fileName = multiple
         ? `${fileNameBase}-${order}.${getBlobExtension(blob)}`
         : `${fileNameBase}.${getBlobExtension(blob)}`
-      triggerDownload(blob, fileName)
+      triggerDownloadBlob(blob, fileName)
       successCount++
       if (multiple) await delay(100)
     } catch (err) {
@@ -72,7 +72,7 @@ export async function downloadImageEntries(entries: DownloadImageZipEntry[]): Pr
         duplicateIndex++
       }
       usedNames.add(fileName)
-      triggerDownload(blob, fileName)
+      triggerDownloadBlob(blob, fileName)
       successCount++
       if (multiple) await delay(100)
     } catch (err) {
@@ -117,7 +117,7 @@ export async function downloadImageEntriesAsZip(entries: DownloadImageZipEntry[]
   if (successCount > 0) {
     const zipped = zipSync(zipFiles, { level: 6 })
     const buffer = zipped.buffer.slice(zipped.byteOffset, zipped.byteOffset + zipped.byteLength) as ArrayBuffer
-    triggerDownload(new Blob([buffer], { type: 'application/zip' }), `${sanitizeFileNamePart(zipFileNameBase) || 'images'}.zip`)
+    triggerDownloadBlob(new Blob([buffer], { type: 'application/zip' }), `${sanitizeFileNamePart(zipFileNameBase) || 'images'}.zip`)
   }
 
   return { successCount, failCount }
@@ -147,7 +147,7 @@ async function getImageBlob(imageIdOrUrl: string): Promise<Blob> {
   return await res.blob()
 }
 
-function triggerDownload(blob: Blob, fileName: string) {
+export function triggerDownloadBlob(blob: Blob, fileName: string) {
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url

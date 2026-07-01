@@ -238,7 +238,7 @@ npm run build
 npx edgeone makers deploy ./dist --name image-playground --env production --json
 ```
 
-最近一次已知生产部署：2026-06-30，Deployment ID `dpqdqy3b3ep4`。
+最近一次已知生产部署：2026-07-01，Deployment ID `dph5b5qx7gso`。
 
 当前用户这次只要求同步 GitHub，没有要求部署 EdgeOne。
 

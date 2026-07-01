@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { useStore, batchApplyTemplates, getTemplateApplyUploadPlan, getTemplatePromptReplacement } from '../store'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useStore, batchApplyTemplates, getTemplateApplyUploadPlan, getTemplatePromptReplacements } from '../store'
 import type { TaskRecord } from '../types'
 import { fileToDataUrl } from '../lib/dataUrl'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
@@ -8,34 +8,51 @@ type UploadSlotTarget = { kind: 'single' | 'multi'; index: number }
 
 function TemplatePromptReplacementEditor({
   template,
-  value,
+  values,
   onChange,
 }: {
   template: TaskRecord
-  value: string
-  onChange: (value: string) => void
+  values: string[]
+  onChange: (index: number, value: string) => void
 }) {
-  const replacement = getTemplatePromptReplacement(template)
-  if (!replacement) return null
+  const replacements = getTemplatePromptReplacements(template)
+  if (!replacements.length) return null
   const title = template.customName?.trim() || template.prompt.slice(0, 18) || '未命名模板'
+  const promptParts: ReactNode[] = []
+  let cursor = 0
+  replacements.forEach((replacement, index) => {
+    if (replacement.start > cursor) promptParts.push(<span key={`text-${index}`}>{template.prompt.slice(cursor, replacement.start)}</span>)
+    promptParts.push(
+      <mark key={`mark-${index}`} className="rounded bg-yellow-200/80 px-1 text-yellow-950 dark:bg-yellow-400/25 dark:text-yellow-100">
+        {values[index]?.trim() || replacement.originalText}
+      </mark>,
+    )
+    cursor = replacement.end
+  })
+  if (cursor < template.prompt.length) promptParts.push(<span key="text-end">{template.prompt.slice(cursor)}</span>)
   return (
     <div className="rounded-2xl border border-gray-100 bg-gray-50/70 p-3 dark:border-white/[0.06] dark:bg-white/[0.03]">
       <div className="mb-2 flex items-center justify-between gap-3">
         <p className="min-w-0 truncate text-xs font-semibold text-gray-700 dark:text-gray-200" title={title}>{title}</p>
-        <span className="shrink-0 rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-medium text-blue-600 dark:bg-blue-500/10 dark:text-blue-300">提示词替换</span>
+        <span className="shrink-0 rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-medium text-blue-600 dark:bg-blue-500/10 dark:text-blue-300">提示词替换 × {replacements.length}</span>
       </div>
       <div className="max-h-24 overflow-y-auto rounded-xl bg-white/70 px-3 py-2 text-xs leading-relaxed text-gray-600 custom-scrollbar dark:bg-black/10 dark:text-gray-300">
-        <span>{template.prompt.slice(0, replacement.start)}</span>
-        <mark className="rounded bg-yellow-200/80 px-1 text-yellow-950 dark:bg-yellow-400/25 dark:text-yellow-100">{replacement.originalText}</mark>
-        <span>{template.prompt.slice(replacement.end)}</span>
+        {promptParts}
       </div>
-      <textarea
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        rows={2}
-        placeholder="填写替换这段提示词的内容；留空则保留原文"
-        className="mt-2 w-full resize-y rounded-xl border border-gray-200/70 bg-white px-3 py-2 text-xs leading-relaxed outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-gray-100 dark:focus:border-blue-500/50"
-      />
+      <div className="mt-2 space-y-2">
+        {replacements.map((replacement, index) => (
+          <label key={`${replacement.start}-${replacement.end}`} className="block">
+            <span className="mb-1 block truncate text-[11px] text-gray-500 dark:text-gray-400">替换段 {index + 1}：{replacement.originalText}</span>
+            <textarea
+              value={values[index] ?? ''}
+              onChange={(e) => onChange(index, e.target.value)}
+              rows={2}
+              placeholder="填写后会在上方高亮位置替换；留空则保留原文"
+              className="w-full resize-y rounded-xl border border-gray-200/70 bg-white px-3 py-2 text-xs leading-relaxed outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-gray-100 dark:focus:border-blue-500/50"
+            />
+          </label>
+        ))}
+      </div>
     </div>
   )
 }
@@ -107,7 +124,7 @@ export default function TemplateApplyModal() {
 
   const [singleImage, setSingleImage] = useState('')
   const [multiImages, setMultiImages] = useState<string[]>([])
-  const [promptReplacements, setPromptReplacements] = useState<Record<string, string>>({})
+  const [promptReplacements, setPromptReplacements] = useState<Record<string, string[]>>({})
   const [activeSlot, setActiveSlot] = useState<UploadSlotTarget>({ kind: 'single', index: 0 })
   const [pendingSlot, setPendingSlot] = useState<UploadSlotTarget>({ kind: 'single', index: 0 })
   const [submitting, setSubmitting] = useState(false)
@@ -118,7 +135,7 @@ export default function TemplateApplyModal() {
   )
   const slotPlan = useMemo(() => getTemplateApplyUploadPlan(templates), [templates])
   const promptReplacementTemplates = useMemo(
-    () => templates.filter((template) => Boolean(getTemplatePromptReplacement(template))),
+    () => templates.filter((template) => getTemplatePromptReplacements(template).length > 0),
     [templates],
   )
 
@@ -271,8 +288,12 @@ export default function TemplateApplyModal() {
                 <TemplatePromptReplacementEditor
                   key={template.id}
                   template={template}
-                  value={promptReplacements[template.id] ?? ''}
-                  onChange={(value) => setPromptReplacements((current) => ({ ...current, [template.id]: value }))}
+                  values={promptReplacements[template.id] ?? []}
+                  onChange={(index, value) => setPromptReplacements((current) => {
+                    const values = [...(current[template.id] ?? [])]
+                    values[index] = value
+                    return { ...current, [template.id]: values }
+                  })}
                 />
               ))}
             </div>

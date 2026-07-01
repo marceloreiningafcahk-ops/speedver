@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo, useRef } from 'react'
+import { useEffect, useState, useMemo, useRef, type PointerEvent as ReactPointerEvent } from 'react'
 import { useStore, getCachedImage, ensureImageCached, reuseConfig, editOutputs, removeTask, showCodexCliPrompt, getCodexCliPromptKey, retryTask } from '../store'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
@@ -6,13 +6,14 @@ import { useTooltip } from '../hooks/useTooltip'
 import { formatImageRatio } from '../lib/size'
 import { ActualValueBadge, DetailParamValue } from '../lib/paramDisplay'
 import { copyImageSourceToClipboard, copyTextToClipboard, getClipboardFailureMessage } from '../lib/clipboard'
-import { createMaskPreviewDataUrl } from '../lib/canvasImage'
+import { createMaskPreviewDataUrl, loadImage } from '../lib/canvasImage'
 import { dismissAllTooltips } from '../lib/tooltipDismiss'
-import { downloadImageEntriesAsZip, downloadImageIds, getImageZipEntries } from '../lib/downloadImages'
+import { downloadImageEntriesAsZip, downloadImageIds, getImageZipEntries, triggerDownloadBlob } from '../lib/downloadImages'
+import { cropImageDataUrl, getFourGridSplitPlanDataUrl, resizeImageDataUrl, splitFourGridImageDataUrl, type FourGridSplitPlan, type ImageCropRect } from '../lib/imageExport'
 import { formatExportFileTime } from '../lib/exportFileName'
 import { isAgentTaskPromptPending } from '../lib/taskPromptDisplay'
 import { replaceImageMentionsForApi } from '../lib/promptImageMentions'
-import { CloseIcon, CodeIcon, CopyIcon, DownloadIcon, EditIcon, LinkIcon, TrashIcon } from './icons'
+import { ChevronDownIcon, CloseIcon, CodeIcon, CopyIcon, DownloadIcon, EditIcon, LinkIcon, TrashIcon } from './icons'
 
 import ViewportTooltip from './ViewportTooltip'
 
@@ -38,6 +39,11 @@ export default function DetailModal() {
   const [now, setNow] = useState(Date.now())
   const [showRawUrlsModal, setShowRawUrlsModal] = useState(false)
   const [showRawResponseModal, setShowRawResponseModal] = useState(false)
+  const [showExportMenu, setShowExportMenu] = useState(false)
+  const [showResizeExportModal, setShowResizeExportModal] = useState(false)
+  const [showFourGridPreviewModal, setShowFourGridPreviewModal] = useState(false)
+  const [showCropExportModal, setShowCropExportModal] = useState(false)
+  const [exporting, setExporting] = useState(false)
   const [streamPreviewLoaded, setStreamPreviewLoaded] = useState(false)
   const modalRef = useRef<HTMLDivElement>(null)
   const rawUrlsModalRef = useRef<HTMLDivElement>(null)
@@ -103,6 +109,10 @@ export default function DetailModal() {
   // Reset index when task changes
   useEffect(() => {
     setImageIndex(0)
+    setShowExportMenu(false)
+    setShowResizeExportModal(false)
+    setShowFourGridPreviewModal(false)
+    setShowCropExportModal(false)
   }, [detailTaskId])
 
   useEffect(() => {
@@ -387,6 +397,64 @@ export default function DetailModal() {
     }
   }
 
+  const getCurrentOutputFileNameBase = (suffix = '') => {
+    const indexPart = currentOutputImageIndex >= 0 ? `-${String(currentOutputImageIndex + 1).padStart(2, '0')}` : ''
+    const suffixPart = suffix ? `-${suffix}` : ''
+    return `task-${task.id}${indexPart}_${formatExportFileTime(new Date(task.createdAt))}${suffixPart}`
+  }
+
+  const handleResizeExport = async (width: number, height: number) => {
+    if (!currentOutputPreviewSrc) return
+    setExporting(true)
+    try {
+      const blob = await resizeImageDataUrl(currentOutputPreviewSrc, width, height)
+      triggerDownloadBlob(blob, `${getCurrentOutputFileNameBase(`${width}x${height}`)}.png`)
+      showToast('已按自定义分辨率导出', 'success')
+      setShowResizeExportModal(false)
+    } catch (err) {
+      console.error(err)
+      showToast('自定义分辨率导出失败', 'error')
+    } finally {
+      setExporting(false)
+    }
+  }
+
+  const handleSplitFourGridExport = async (plan: FourGridSplitPlan) => {
+    if (!currentOutputPreviewSrc) return
+    setExporting(true)
+    try {
+      const blobs = await splitFourGridImageDataUrl(currentOutputPreviewSrc, plan.rects)
+      const fileNameBase = getCurrentOutputFileNameBase()
+      for (let index = 0; index < blobs.length; index++) {
+        triggerDownloadBlob(blobs[index], `${fileNameBase}-切分${String(index + 1).padStart(2, '0')}.png`)
+        if (index < blobs.length - 1) await delay(100)
+      }
+      showToast('已切分导出 4 张图片', 'success')
+      setShowFourGridPreviewModal(false)
+    } catch (err) {
+      console.error(err)
+      showToast('四宫格切分失败', 'error')
+    } finally {
+      setExporting(false)
+    }
+  }
+
+  const handleCropExport = async (rect: ImageCropRect) => {
+    if (!currentOutputPreviewSrc) return
+    setExporting(true)
+    try {
+      const blob = await cropImageDataUrl(currentOutputPreviewSrc, rect)
+      triggerDownloadBlob(blob, `${getCurrentOutputFileNameBase('裁切')}.png`)
+      showToast('已导出裁切图片', 'success')
+      setShowCropExportModal(false)
+    } catch (err) {
+      console.error(err)
+      showToast('裁切导出失败', 'error')
+    } finally {
+      setExporting(false)
+    }
+  }
+
   const handleDownloadCurrentOriginalOutput = async (e: React.MouseEvent) => {
     e.stopPropagation()
     if (!currentOriginalOutputImageId || !task) return
@@ -479,23 +547,79 @@ export default function DetailModal() {
           {task.status === 'done' && outputLen > 0 && !hasOutputGrid && (currentOutputImageId || task.outputImages.length > 0) && (
             <div className="absolute right-3 top-[15px] z-20 flex items-center gap-1.5">
               {currentOutputImageId && (
-                <div className="relative group flex">
-                  <button
-                    type="button"
-                    {...downloadImageTooltip.handlers}
-                    onClick={(e) => {
-                      downloadImageTooltip.handlers.onClick()
-                      handleDownloadCurrentOutput(e)
-                    }}
-                      className="flex items-center justify-center px-1.5 py-0.5 bg-black/50 text-white rounded backdrop-blur-sm hover:bg-black/70 transition focus:outline-none focus:ring-1 focus:ring-white/50"
-                    aria-label="下载图片"
-                  >
-                    <DownloadIcon className="h-4 w-4" />
-                  </button>
-                  <ViewportTooltip visible={downloadImageTooltip.visible} className="whitespace-nowrap">
-                    下载图片
-                  </ViewportTooltip>
-                </div>
+                <>
+                  <div className="relative group flex">
+                    <button
+                      type="button"
+                      {...downloadImageTooltip.handlers}
+                      onClick={(e) => {
+                        downloadImageTooltip.handlers.onClick()
+                        handleDownloadCurrentOutput(e)
+                      }}
+                        className="flex items-center justify-center px-1.5 py-0.5 bg-black/50 text-white rounded backdrop-blur-sm hover:bg-black/70 transition focus:outline-none focus:ring-1 focus:ring-white/50"
+                      aria-label="下载图片"
+                    >
+                      <DownloadIcon className="h-4 w-4" />
+                    </button>
+                    <ViewportTooltip visible={downloadImageTooltip.visible} className="whitespace-nowrap">
+                      下载图片
+                    </ViewportTooltip>
+                  </div>
+                  <div className="relative flex">
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        dismissAllTooltips()
+                        setShowExportMenu((visible) => !visible)
+                      }}
+                      disabled={exporting}
+                      className="flex items-center justify-center gap-0.5 rounded bg-black/50 py-0.5 pl-1.5 pr-1 text-white backdrop-blur-sm transition hover:bg-black/70 focus:outline-none focus:ring-1 focus:ring-white/50 disabled:cursor-wait disabled:opacity-70"
+                      aria-label="更多导出"
+                    >
+                      <span className="text-[10px] font-semibold leading-none">导出</span>
+                      <ChevronDownIcon className="h-3.5 w-3.5" />
+                    </button>
+                    {showExportMenu && (
+                      <div
+                        className="absolute right-0 top-full z-30 mt-1 w-40 overflow-hidden rounded-xl border border-white/10 bg-gray-950/95 py-1 text-xs text-white shadow-xl backdrop-blur"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowExportMenu(false)
+                            setShowResizeExportModal(true)
+                          }}
+                          className="block w-full px-3 py-2 text-left transition hover:bg-white/10"
+                        >
+                          自定义分辨率
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowExportMenu(false)
+                            setShowFourGridPreviewModal(true)
+                          }}
+                          disabled={exporting}
+                          className="block w-full px-3 py-2 text-left transition hover:bg-white/10 disabled:cursor-wait disabled:opacity-60"
+                        >
+                          四宫格切分
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowExportMenu(false)
+                            setShowCropExportModal(true)
+                          }}
+                          className="block w-full px-3 py-2 text-left transition hover:bg-white/10"
+                        >
+                          裁切导出
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </>
               )}
               {task.outputImages.length > 1 && (
                 <div className="relative group flex">
@@ -1374,6 +1498,502 @@ export default function DetailModal() {
           </div>
         </div>
       )}
+
+      {showResizeExportModal && currentOutputPreviewSrc && (
+        <ResizeExportModal
+          sourceSrc={currentOutputPreviewSrc}
+          fallbackSize={currentImageSize}
+          exporting={exporting}
+          onClose={() => setShowResizeExportModal(false)}
+          onExport={(width, height) => void handleResizeExport(width, height)}
+        />
+      )}
+
+      {showCropExportModal && currentOutputPreviewSrc && (
+        <CropExportModal
+          sourceSrc={currentOutputPreviewSrc}
+          exporting={exporting}
+          onClose={() => setShowCropExportModal(false)}
+          onExport={(rect) => void handleCropExport(rect)}
+        />
+      )}
+
+      {showFourGridPreviewModal && currentOutputPreviewSrc && (
+        <FourGridPreviewModal
+          sourceSrc={currentOutputPreviewSrc}
+          exporting={exporting}
+          onClose={() => setShowFourGridPreviewModal(false)}
+          onExport={(plan) => void handleSplitFourGridExport(plan)}
+        />
+      )}
     </div>
   )
+}
+
+function parseImageSizeText(value: string) {
+  const match = value.match(/(\d+)\s*[x×]\s*(\d+)/i)
+  if (!match) return null
+  return { width: Number(match[1]), height: Number(match[2]) }
+}
+
+function delay(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms))
+}
+
+function ResizeExportModal({
+  sourceSrc,
+  fallbackSize,
+  exporting,
+  onClose,
+  onExport,
+}: {
+  sourceSrc: string
+  fallbackSize: string
+  exporting: boolean
+  onClose: () => void
+  onExport: (width: number, height: number) => void
+}) {
+  const parsedSize = parseImageSizeText(fallbackSize)
+  const [width, setWidth] = useState(String(parsedSize?.width || 800))
+  const [height, setHeight] = useState(String(parsedSize?.height || 800))
+
+  useEffect(() => {
+    if (parsedSize) return
+    let cancelled = false
+    loadImage(sourceSrc)
+      .then((image) => {
+        if (!cancelled) {
+          setWidth(String(image.naturalWidth))
+          setHeight(String(image.naturalHeight))
+        }
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [parsedSize, sourceSrc])
+
+  const widthValue = Math.max(1, Math.round(Number(width) || 0))
+  const heightValue = Math.max(1, Math.round(Number(height) || 0))
+  const canExport = widthValue > 0 && heightValue > 0 && !exporting
+
+  return (
+    <div
+      className="fixed inset-0 z-[70] flex items-center justify-center bg-black/45 p-4 backdrop-blur-sm"
+      onClick={(e) => {
+        e.stopPropagation()
+        if (e.target === e.currentTarget) onClose()
+      }}
+    >
+      <div className="w-full max-w-sm rounded-2xl border border-white/50 bg-white p-5 shadow-2xl dark:border-white/[0.08] dark:bg-gray-900">
+        <div className="mb-4 flex items-start justify-between gap-3">
+          <div>
+            <h3 className="text-base font-semibold text-gray-900 dark:text-gray-100">自定义分辨率导出</h3>
+            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">导出为 PNG</p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-full p-1 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-white/[0.06] dark:hover:text-gray-200"
+            aria-label="关闭"
+          >
+            <CloseIcon className="h-5 w-5" />
+          </button>
+        </div>
+        <div className="grid grid-cols-[1fr_auto_1fr] items-end gap-2">
+          <label>
+            <span className="mb-1 block text-xs text-gray-500 dark:text-gray-400">宽度</span>
+            <input
+              value={width}
+              onChange={(e) => setWidth(e.target.value)}
+              type="number"
+              min={1}
+              className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm outline-none focus:border-blue-400 dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-gray-100"
+            />
+          </label>
+          <span className="pb-2 text-sm text-gray-400">×</span>
+          <label>
+            <span className="mb-1 block text-xs text-gray-500 dark:text-gray-400">高度</span>
+            <input
+              value={height}
+              onChange={(e) => setHeight(e.target.value)}
+              type="number"
+              min={1}
+              className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm outline-none focus:border-blue-400 dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-gray-100"
+            />
+          </label>
+        </div>
+        <div className="mt-5 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-xl px-4 py-2 text-sm text-gray-600 transition hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-white/[0.06]"
+          >
+            取消
+          </button>
+          <button
+            type="button"
+            onClick={() => onExport(widthValue, heightValue)}
+            disabled={!canExport}
+            className="rounded-xl bg-blue-500 px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-600 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {exporting ? '导出中...' : '导出'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function FourGridPreviewModal({
+  sourceSrc,
+  exporting,
+  onClose,
+  onExport,
+}: {
+  sourceSrc: string
+  exporting: boolean
+  onClose: () => void
+  onExport: (plan: FourGridSplitPlan) => void
+}) {
+  const [plan, setPlan] = useState<FourGridSplitPlan | null>(null)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    let cancelled = false
+    setPlan(null)
+    setError('')
+    getFourGridSplitPlanDataUrl(sourceSrc)
+      .then((nextPlan) => {
+        if (!cancelled) setPlan(nextPlan)
+      })
+      .catch((err) => {
+        console.error(err)
+        if (!cancelled) setError('无法读取图片')
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [sourceSrc])
+
+  const canExport = Boolean(plan) && !exporting
+
+  return (
+    <div
+      className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm"
+      onClick={(e) => {
+        e.stopPropagation()
+        if (e.target === e.currentTarget) onClose()
+      }}
+    >
+      <div className="flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-white/50 bg-white shadow-2xl dark:border-white/[0.08] dark:bg-gray-900">
+        <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4 dark:border-white/[0.08]">
+          <div>
+            <h3 className="text-base font-semibold text-gray-900 dark:text-gray-100">四宫格切分预览</h3>
+            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {plan ? `单张 ${plan.cellWidth}×${plan.cellHeight}` : error || '读取图片中'}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-full p-1 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-white/[0.06] dark:hover:text-gray-200"
+            aria-label="关闭"
+          >
+            <CloseIcon className="h-5 w-5" />
+          </button>
+        </div>
+        <div className="min-h-0 flex-1 overflow-auto bg-gray-100 p-4 dark:bg-black/30">
+          <div className="relative mx-auto max-h-[62vh] w-fit max-w-full select-none overflow-hidden rounded-xl bg-black/20">
+            <img src={sourceSrc} alt="" draggable={false} className="max-h-[62vh] max-w-full object-contain" />
+            {plan && (
+              <div className="pointer-events-none absolute inset-0">
+                <div
+                  className="absolute bg-white/70"
+                  style={{
+                    left: `${plan.verticalBand.start / plan.imageWidth * 100}%`,
+                    top: 0,
+                    width: `${Math.max(1, plan.verticalBand.end - plan.verticalBand.start) / plan.imageWidth * 100}%`,
+                    height: '100%',
+                  }}
+                />
+                <div
+                  className="absolute bg-white/70"
+                  style={{
+                    left: 0,
+                    top: `${plan.horizontalBand.start / plan.imageHeight * 100}%`,
+                    width: '100%',
+                    height: `${Math.max(1, plan.horizontalBand.end - plan.horizontalBand.start) / plan.imageHeight * 100}%`,
+                  }}
+                />
+                {plan.rects.map((rect, index) => (
+                  <div
+                    key={index}
+                    className="absolute border-2 border-emerald-300 bg-emerald-400/10 shadow-[0_0_0_1px_rgba(0,0,0,0.35)]"
+                    style={{
+                      left: `${rect.x / plan.imageWidth * 100}%`,
+                      top: `${rect.y / plan.imageHeight * 100}%`,
+                      width: `${rect.width / plan.imageWidth * 100}%`,
+                      height: `${rect.height / plan.imageHeight * 100}%`,
+                    }}
+                  >
+                    <span className="absolute left-1 top-1 rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-semibold text-white">
+                      {index + 1}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+        <div className="flex justify-end gap-2 border-t border-gray-100 p-5 dark:border-white/[0.08]">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-xl px-4 py-2 text-sm text-gray-600 transition hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-white/[0.06]"
+          >
+            取消
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              if (plan) onExport(plan)
+            }}
+            disabled={!canExport}
+            className="rounded-xl bg-blue-500 px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-600 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {exporting ? '导出中...' : '确认导出'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+type CropSelection = { x: number; y: number; width: number; height: number }
+type CropHandle = 'n' | 's' | 'e' | 'w' | 'nw' | 'ne' | 'sw' | 'se'
+type CropDragState =
+  | { mode: 'new'; startPoint: { x: number; y: number } }
+  | { mode: 'move'; startPoint: { x: number; y: number }; startSelection: CropSelection }
+  | { mode: 'resize'; handle: CropHandle; startSelection: CropSelection }
+
+const MIN_CROP_SELECTION = 0.02
+
+function CropExportModal({
+  sourceSrc,
+  exporting,
+  onClose,
+  onExport,
+}: {
+  sourceSrc: string
+  exporting: boolean
+  onClose: () => void
+  onExport: (rect: ImageCropRect) => void
+}) {
+  const imageWrapRef = useRef<HTMLDivElement>(null)
+  const dragStateRef = useRef<CropDragState | null>(null)
+  const [imageSize, setImageSize] = useState({ width: 0, height: 0 })
+  const [selection, setSelection] = useState<CropSelection>({ x: 0.1, y: 0.1, width: 0.8, height: 0.8 })
+
+  useEffect(() => {
+    let cancelled = false
+    loadImage(sourceSrc)
+      .then((image) => {
+        if (!cancelled) setImageSize({ width: image.naturalWidth, height: image.naturalHeight })
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [sourceSrc])
+
+  const getPoint = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const rect = imageWrapRef.current?.getBoundingClientRect()
+    if (!rect) return null
+    return {
+      x: Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)),
+      y: Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height)),
+    }
+  }
+
+  const startDrag = (event: ReactPointerEvent<HTMLDivElement>, dragState: CropDragState) => {
+    event.stopPropagation()
+    dragStateRef.current = dragState
+    try {
+      imageWrapRef.current?.setPointerCapture(event.pointerId)
+    } catch {}
+  }
+
+  const updateNewSelection = (point: { x: number; y: number }, start: { x: number; y: number }) => {
+    const width = Math.max(MIN_CROP_SELECTION, Math.abs(point.x - start.x))
+    const height = Math.max(MIN_CROP_SELECTION, Math.abs(point.y - start.y))
+    setSelection({
+      x: clamp01(Math.min(start.x, point.x), 0, 1 - width),
+      y: clamp01(Math.min(start.y, point.y), 0, 1 - height),
+      width,
+      height,
+    })
+  }
+
+  const handlePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const point = getPoint(event)
+    if (!point) return
+    startDrag(event, { mode: 'new', startPoint: point })
+    updateNewSelection(point, point)
+  }
+
+  const handlePointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const dragState = dragStateRef.current
+    if (!dragState) return
+    const point = getPoint(event)
+    if (!point) return
+
+    if (dragState.mode === 'new') {
+      updateNewSelection(point, dragState.startPoint)
+      return
+    }
+
+    if (dragState.mode === 'move') {
+      const dx = point.x - dragState.startPoint.x
+      const dy = point.y - dragState.startPoint.y
+      setSelection({
+        ...dragState.startSelection,
+        x: clamp01(dragState.startSelection.x + dx, 0, 1 - dragState.startSelection.width),
+        y: clamp01(dragState.startSelection.y + dy, 0, 1 - dragState.startSelection.height),
+      })
+      return
+    }
+
+    setSelection(resizeCropSelection(dragState.startSelection, dragState.handle, point))
+  }
+
+  const handlePointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
+    dragStateRef.current = null
+    const target = imageWrapRef.current
+    if (target?.hasPointerCapture(event.pointerId)) target.releasePointerCapture(event.pointerId)
+  }
+
+  const exportRect = {
+    x: Math.round(selection.x * imageSize.width),
+    y: Math.round(selection.y * imageSize.height),
+    width: Math.round(selection.width * imageSize.width),
+    height: Math.round(selection.height * imageSize.height),
+  }
+  const canExport = imageSize.width > 0 && imageSize.height > 0 && exportRect.width > 0 && exportRect.height > 0 && !exporting
+
+  return (
+    <div
+      className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm"
+      onClick={(e) => {
+        e.stopPropagation()
+        if (e.target === e.currentTarget) onClose()
+      }}
+    >
+      <div className="flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-white/50 bg-white shadow-2xl dark:border-white/[0.08] dark:bg-gray-900">
+        <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4 dark:border-white/[0.08]">
+          <div>
+            <h3 className="text-base font-semibold text-gray-900 dark:text-gray-100">裁切导出</h3>
+            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {imageSize.width > 0 ? `${exportRect.width}×${exportRect.height}` : '读取图片中'}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-full p-1 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-white/[0.06] dark:hover:text-gray-200"
+            aria-label="关闭"
+          >
+            <CloseIcon className="h-5 w-5" />
+          </button>
+        </div>
+        <div className="min-h-0 flex-1 overflow-auto bg-gray-100 p-4 dark:bg-black/30">
+          <div
+            ref={imageWrapRef}
+            className="relative mx-auto max-h-[62vh] w-fit max-w-full touch-none select-none overflow-hidden rounded-xl bg-black/20"
+            onPointerDown={handlePointerDown}
+            onPointerMove={handlePointerMove}
+            onPointerUp={handlePointerUp}
+            onPointerCancel={handlePointerUp}
+          >
+            <img src={sourceSrc} alt="" draggable={false} className="max-h-[62vh] max-w-full object-contain" />
+            <div
+              className="absolute border-2 border-white shadow-[0_0_0_9999px_rgba(0,0,0,0.45)]"
+              onPointerDown={(event) => {
+                const point = getPoint(event)
+                if (!point) return
+                startDrag(event, { mode: 'move', startPoint: point, startSelection: selection })
+              }}
+              style={{
+                left: `${selection.x * 100}%`,
+                top: `${selection.y * 100}%`,
+                width: `${selection.width * 100}%`,
+                height: `${selection.height * 100}%`,
+                cursor: 'move',
+              }}
+            >
+              {cropHandles.map((handle) => (
+                <div
+                  key={handle.id}
+                  className={`absolute h-3 w-3 rounded-full border border-blue-500 bg-white shadow ${handle.className}`}
+                  style={{ cursor: handle.cursor }}
+                  onPointerDown={(event) => startDrag(event, { mode: 'resize', handle: handle.id, startSelection: selection })}
+                />
+              ))}
+            </div>
+          </div>
+        </div>
+        <div className="flex justify-end gap-2 border-t border-gray-100 p-5 dark:border-white/[0.08]">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-xl px-4 py-2 text-sm text-gray-600 transition hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-white/[0.06]"
+          >
+            取消
+          </button>
+          <button
+            type="button"
+            onClick={() => onExport(exportRect)}
+            disabled={!canExport}
+            className="rounded-xl bg-blue-500 px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-600 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {exporting ? '导出中...' : '导出裁切'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+const cropHandles: Array<{ id: CropHandle; className: string; cursor: string }> = [
+  { id: 'nw', className: '-left-1.5 -top-1.5', cursor: 'nwse-resize' },
+  { id: 'n', className: 'left-1/2 -top-1.5 -translate-x-1/2', cursor: 'ns-resize' },
+  { id: 'ne', className: '-right-1.5 -top-1.5', cursor: 'nesw-resize' },
+  { id: 'e', className: '-right-1.5 top-1/2 -translate-y-1/2', cursor: 'ew-resize' },
+  { id: 'se', className: '-bottom-1.5 -right-1.5', cursor: 'nwse-resize' },
+  { id: 's', className: '-bottom-1.5 left-1/2 -translate-x-1/2', cursor: 'ns-resize' },
+  { id: 'sw', className: '-bottom-1.5 -left-1.5', cursor: 'nesw-resize' },
+  { id: 'w', className: '-left-1.5 top-1/2 -translate-y-1/2', cursor: 'ew-resize' },
+]
+
+function resizeCropSelection(selection: CropSelection, handle: CropHandle, point: { x: number; y: number }): CropSelection {
+  let left = selection.x
+  let top = selection.y
+  let right = selection.x + selection.width
+  let bottom = selection.y + selection.height
+
+  if (handle.includes('w')) left = clamp01(point.x, 0, right - MIN_CROP_SELECTION)
+  if (handle.includes('e')) right = clamp01(point.x, left + MIN_CROP_SELECTION, 1)
+  if (handle.includes('n')) top = clamp01(point.y, 0, bottom - MIN_CROP_SELECTION)
+  if (handle.includes('s')) bottom = clamp01(point.y, top + MIN_CROP_SELECTION, 1)
+
+  return {
+    x: left,
+    y: top,
+    width: Math.max(MIN_CROP_SELECTION, right - left),
+    height: Math.max(MIN_CROP_SELECTION, bottom - top),
+  }
+}
+
+function clamp01(value: number, min = 0, max = 1) {
+  return Math.max(min, Math.min(max, value))
 }

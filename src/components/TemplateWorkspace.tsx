@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { TaskRecord } from '../types'
-import { useStore, ensureImageThumbnailCached, subscribeImageThumbnail, updateTaskInStore, removeTask, renameTemplateCollection, removeTemplateCollection, getTemplateCollections, moveTemplatesToCollection, reuseConfig, getTemplateReplaceImageIndexes, getTemplatePromptReplacement, updateTemplateCollectionNote, importTemplates, clearTemplates } from '../store'
+import { useStore, ensureImageThumbnailCached, subscribeImageThumbnail, updateTaskInStore, removeTask, renameTemplateCollection, removeTemplateCollection, getTemplateCollections, moveTemplatesToCollection, reuseConfig, getTemplateReplaceImageIndexes, getLegacyTemplatePromptReplacement, getTemplatePromptReplacements, updateTemplateCollectionNote, importTemplates, clearTemplates } from '../store'
 import { TemplateIcon, TagIcon, TrashIcon, ChevronDownIcon } from './icons'
 import TemplateApplyModal from './TemplateApplyModal'
+import Select from './Select'
 
 function useImageThumb(imageId: string | undefined | null) {
   const [src, setSrc] = useState('')
@@ -85,6 +86,11 @@ function TemplateCard({ template, suppressClickUntil }: { template: TaskRecord; 
       setConfirmDialog({ title: '提示词不能为空', message: '模板的提示词不能为空，请填写后再保存。', action: () => {} })
       return
     }
+    const nextPromptReplacements = getTemplatePromptReplacements({
+      prompt: nextPrompt,
+      templatePromptReplacement: template.templatePromptReplacement,
+      templatePromptReplacements: template.templatePromptReplacements,
+    })
     updateTaskInStore(template.id, {
       customName: nameDraft.trim() || undefined,
       customColor: colorDraft.trim() || undefined,
@@ -92,7 +98,8 @@ function TemplateCard({ template, suppressClickUntil }: { template: TaskRecord; 
       prompt: nextPrompt,
       templateReplaceImageIndex: replaceIndexDrafts[0] ?? 0,
       templateReplaceImageIndexes: replaceIndexDrafts,
-      templatePromptReplacement: getTemplatePromptReplacement({ prompt: nextPrompt, templatePromptReplacement: template.templatePromptReplacement }) ?? undefined,
+      templatePromptReplacement: getLegacyTemplatePromptReplacement({ prompt: nextPrompt, templatePromptReplacements: nextPromptReplacements }),
+      templatePromptReplacements: nextPromptReplacements.length ? nextPromptReplacements : undefined,
     })
     setEditing(false)
   }
@@ -307,6 +314,8 @@ export default function TemplateWorkspace() {
   const setShowApply = useStore((s) => s.setShowTemplateApplyModal)
   const showApply = useStore((s) => s.showTemplateApplyModal)
   const setConfirmDialog = useStore((s) => s.setConfirmDialog)
+  const settings = useStore((s) => s.settings)
+  const setSettings = useStore((s) => s.setSettings)
 
   const importInputRef = useRef<HTMLInputElement>(null)
   const gridRef = useRef<HTMLDivElement>(null)
@@ -329,6 +338,16 @@ export default function TemplateWorkspace() {
   const [groupNoteDraft, setGroupNoteDraft] = useState('')
   const [importProgress, setImportProgress] = useState<ImportProgress | null>(null)
   const isImporting = Boolean(importProgress)
+  const currentProfile = settings.profiles.find((profile) => profile.id === settings.activeProfileId) ?? settings.profiles[0]
+  const profileOptions = useMemo(
+    () => settings.profiles.map((profile) => ({ label: profile.name, value: profile.id })),
+    [settings.profiles],
+  )
+
+  const handleSwitchProfile = (profileId: string) => {
+    if (profileId === settings.activeProfileId) return
+    setSettings({ activeProfileId: profileId })
+  }
 
   const toggleGroupCollapsed = (key: string) => setCollapsedGroups((prev) => ({ ...prev, [key]: !prev[key] }))
 
@@ -598,7 +617,7 @@ export default function TemplateWorkspace() {
             <h2 className="text-xl font-semibold text-gray-900 dark:text-gray-100">模板模式</h2>
             <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">管理保存的模板，选择后可批量套用生成。</p>
           </div>
-          <div className="flex flex-wrap justify-end gap-2">
+          <div className="flex flex-wrap items-center justify-end gap-2">
             <button
               type="button"
               onClick={() => setConfirmDialog({
@@ -611,6 +630,15 @@ export default function TemplateWorkspace() {
             >
               一键清空模板
             </button>
+            <label className="ml-4 flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
+              <span className="shrink-0">当前配置</span>
+              <Select
+                value={currentProfile?.id ?? ''}
+                onChange={(value) => handleSwitchProfile(String(value))}
+                options={profileOptions}
+                className="min-w-[150px] rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 shadow-sm transition dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-gray-100"
+              />
+            </label>
             <button
               type="button"
               onClick={() => importInputRef.current?.click()}

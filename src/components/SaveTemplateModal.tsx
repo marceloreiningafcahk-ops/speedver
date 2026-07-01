@@ -32,7 +32,7 @@ export default function SaveTemplateModal() {
   const [color, setColor] = useState('')
   const [groupChoice, setGroupChoice] = useState<string>(UNGROUPED_VALUE)
   const [newGroupName, setNewGroupName] = useState('')
-  const [promptReplacement, setPromptReplacement] = useState<TemplatePromptReplacement | null>(null)
+  const [promptReplacements, setPromptReplacements] = useState<TemplatePromptReplacement[]>([])
   const [saving, setSaving] = useState(false)
 
   const onClose = () => setOpen(false)
@@ -55,7 +55,7 @@ export default function SaveTemplateModal() {
       templateCollectionId = groupChoice
       templateCollectionName = collections.find((c) => c.id === groupChoice)?.name
     }
-    const ok = await saveCurrentInputAsTemplate({ replaceableIndex: replaceableIndexes[0] ?? 0, replaceableIndexes, coverIndex, promptReplacement, name, color, templateCollectionId, templateCollectionName })
+    const ok = await saveCurrentInputAsTemplate({ replaceableIndex: replaceableIndexes[0] ?? 0, replaceableIndexes, coverIndex, promptReplacements, name, color, templateCollectionId, templateCollectionName })
     setSaving(false)
     if (ok) onClose()
   }
@@ -67,10 +67,17 @@ export default function SaveTemplateModal() {
     const end = Math.max(el.selectionStart, el.selectionEnd)
     const originalText = prompt.slice(start, end)
     if (!originalText.trim()) {
-      setPromptReplacement(null)
       return
     }
-    setPromptReplacement({ start, end, originalText })
+    const nextReplacement = { start, end, originalText }
+    setPromptReplacements((current) => {
+      const withoutOverlap = current.filter((item) => end <= item.start || start >= item.end)
+      return [...withoutOverlap, nextReplacement].sort((a, b) => a.start - b.start || a.end - b.end)
+    })
+  }
+
+  const removePromptReplacement = (index: number) => {
+    setPromptReplacements((current) => current.filter((_, itemIndex) => itemIndex !== index))
   }
 
   return (
@@ -102,13 +109,13 @@ export default function SaveTemplateModal() {
             <div className="mb-2 flex items-center justify-between gap-2">
               <p className="text-xs font-medium text-gray-500 dark:text-gray-400">提示词替换段（可选）</p>
               <div className="flex items-center gap-1">
-                {promptReplacement && (
+                {promptReplacements.length > 0 && (
                   <button
                     type="button"
-                    onClick={() => setPromptReplacement(null)}
+                    onClick={() => setPromptReplacements([])}
                     className="rounded-lg px-2 py-1 text-[11px] text-gray-500 transition hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-white/[0.06]"
                   >
-                    清除
+                    清除全部
                   </button>
                 )}
                 <button
@@ -116,7 +123,7 @@ export default function SaveTemplateModal() {
                   onClick={setSelectedPromptReplacement}
                   className="rounded-lg bg-blue-50 px-2 py-1 text-[11px] font-medium text-blue-600 transition hover:bg-blue-100 dark:bg-blue-500/10 dark:text-blue-300 dark:hover:bg-blue-500/15"
                 >
-                  设为替换
+                  添加替换段
                 </button>
               </div>
             </div>
@@ -127,13 +134,24 @@ export default function SaveTemplateModal() {
               rows={4}
               className="w-full resize-y rounded-xl border border-gray-200/60 bg-gray-50/70 px-3 py-2 text-xs leading-relaxed text-gray-700 outline-none custom-scrollbar dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200"
             />
-            {promptReplacement ? (
-              <div className="mt-2 rounded-xl border border-blue-100 bg-blue-50/60 px-3 py-2 text-xs text-blue-700 dark:border-blue-500/20 dark:bg-blue-500/10 dark:text-blue-200">
-                套用模板时可替换：
-                <span className="ml-1 font-semibold">{promptReplacement.originalText}</span>
+            {promptReplacements.length > 0 ? (
+              <div className="mt-2 space-y-2 rounded-xl border border-blue-100 bg-blue-50/60 px-3 py-2 text-xs text-blue-700 dark:border-blue-500/20 dark:bg-blue-500/10 dark:text-blue-200">
+                <p className="font-medium">套用模板时可替换 {promptReplacements.length} 段：</p>
+                {promptReplacements.map((item, index) => (
+                  <div key={`${item.start}-${item.end}`} className="flex items-center gap-2">
+                    <span className="min-w-0 flex-1 truncate font-semibold">{index + 1}. {item.originalText}</span>
+                    <button
+                      type="button"
+                      onClick={() => removePromptReplacement(index)}
+                      className="shrink-0 rounded-md px-1.5 py-0.5 text-[11px] transition hover:bg-blue-100 dark:hover:bg-blue-500/15"
+                    >
+                      移除
+                    </button>
+                  </div>
+                ))}
               </div>
             ) : (
-              <p className="mt-1 text-[11px] text-gray-400 dark:text-gray-500">选中上方提示词中的一段，再点击“设为替换”。不设置则套用时不显示提示词替换。</p>
+              <p className="mt-1 text-[11px] text-gray-400 dark:text-gray-500">选中上方提示词中的一段，再点击“添加替换段”；可重复添加多段，不设置则套用时不显示提示词替换。</p>
             )}
           </div>
 
