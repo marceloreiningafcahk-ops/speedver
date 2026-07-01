@@ -577,7 +577,7 @@ export default function DetailModal() {
                       className="flex items-center justify-center gap-0.5 rounded bg-black/50 py-0.5 pl-1.5 pr-1 text-white backdrop-blur-sm transition hover:bg-black/70 focus:outline-none focus:ring-1 focus:ring-white/50 disabled:cursor-wait disabled:opacity-70"
                       aria-label="更多导出"
                     >
-                      <span className="text-[10px] font-semibold leading-none">导出</span>
+                      <span className="whitespace-nowrap text-[10px] font-semibold leading-none">更多导出</span>
                       <ChevronDownIcon className="h-3.5 w-3.5" />
                     </button>
                     {showExportMenu && (
