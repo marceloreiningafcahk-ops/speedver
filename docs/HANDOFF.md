@@ -10,7 +10,7 @@
 - 当前版本：`package.json` 里是 `0.6.10`。
 - 当前主分支：`main`，跟踪 `speedver/main`。
 - 最近一次功能提交：`e30e7db Improve template replacements and image exports`，已推送到 `speedver/main`。
-- 最近一次 EdgeOne 生产部署：2026-07-01，Deployment ID `dph5b5qx7gso`。
+- 最近一次 EdgeOne 生产部署：2026-07-01。具体 Project ID 和控制台链接只保留在本机配置/部署输出里，不写入公开文档。
 - 当前线上地址：`https://image-playground-lkm5myrs.edgeone.cool/`。
 
 本轮最后验证结果：
@@ -274,7 +274,6 @@ git push speedver main
 
 - EdgeOne 项目配置：`.edgeone/project.json`
 - 项目名：`image-playground`
-- Project ID：`makers-ooaiz1b6xhvz`
 - 构建产物：`dist/`
 - 部署命令：
 
@@ -286,9 +285,8 @@ npx edgeone makers deploy ./dist --name image-playground --env production --json
 最近一次生产部署：
 
 - 日期：2026-07-01
-- Deployment ID：`dph5b5qx7gso`
 - 线上地址：`https://image-playground-lkm5myrs.edgeone.cool/`
-- EdgeOne 控制台：`https://console.cloud.tencent.com/edgeone/pages/project/makers-ooaiz1b6xhvz/deployment/dph5b5qx7gso`
+- 说明：Project ID、Deployment ID 和 EdgeOne 控制台链接不写入公开 hand-off；需要时看本机 `.edgeone/project.json` 和最近一次部署命令输出。
 
 浏览器线上 QA 已确认：
 
